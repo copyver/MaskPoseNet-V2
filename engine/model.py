@@ -1,16 +1,26 @@
 import torch
+from nn.tasks import yaml_model_load
 import torch.nn as nn
 import inspect
+from typing import Dict, List, Union
+from pathlib import Path
+import os
+from models import PoseModel,SegModel
+from engine import PoseTrainer,PosePredictor,PoseValidator, SegTrainer, SegPredictor, SegValidator
+
+
+
+RANK = int(os.getenv("RANK", -1))
+LOCAL_RANK = int(os.getenv("LOCAL_RANK", -1))
 
 class Model(nn.Module):
     def __init__(
             self,
-            model: Union[str, Path] = "yolo11n.pt",
+            model: Union[str, Path],
             task: str = None,
             verbose: bool = False,
     ) -> None:
         super().__init__()
-        self.callbacks = callbacks.get_default_callbacks()
         self.predictor = None  # reuse predictor
         self.model = None  # model object
         self.trainer = None  # trainer object
@@ -19,7 +29,6 @@ class Model(nn.Module):
         self.ckpt_path = None
         self.overrides = {}  # overrides for trainer object
         self.metrics = None  # validation/training metrics
-        self.session = None  # HUB session
         self.task = task  # task type
         model = str(model).strip()
 
@@ -49,16 +58,16 @@ class Model(nn.Module):
         cfg_dict = yaml_model_load(cfg)
         self.cfg = cfg
         self.task = task
-        self.model = self._smart_load(task)(cfg_dict, verbose=verbose and RANK == -1)  # build model
+        self.model = self._smart_load("model")(cfg_dict, verbose=verbose and RANK == -1)  # build model
         self.overrides["model"] = self.cfg
         self.overrides["task"] = self.task
 
         # Below added to allow export from YAMLs
-        self.model.args = {**DEFAULT_CFG_DICT, **self.overrides}  # combine default and model args (prefer model args)
+        self.model.args = cfg_dict  # combine default and model args (prefer model args)
         self.model.task = self.task
         self.model_name = cfg
 
-    def _smart_load(self, task: str):
+    def _smart_load(self, key: str):
         """
         Loads the appropriate module based on the model task.
 
@@ -78,6 +87,24 @@ class Model(nn.Module):
             name = self.__class__.__name__
             mode = inspect.stack()[1][3]  # get the function name.
             raise NotImplementedError(
-                emojis(f"WARNING '{name}' model does not support '{mode}' mode for '{self.task}' task yet.")
+                print(f"WARNING '{name}' model does not support '{mode}' mode for '{self.task}' task yet.")
             ) from e
+
+    @property
+    def task_map(self):
+        """Map head to model, trainer, validator, and predictor classes."""
+        return {
+            "segment": {
+                "model": SegModel,
+                "trainer": SegTrainer,
+                "validator": SegValidator,
+                "predictor": SegPredictor,
+            },
+            "pose": {
+                "model": PoseModel,
+                "trainer": PoseTrainer,
+                "validator":PoseValidator,
+                "predictor": PosePredictor,
+            },
+        }
 
