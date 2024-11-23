@@ -2,11 +2,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from transformer import SparseToDenseTransformer
-from model_utils import compute_feature_similarity, compute_fine_Rt
-from loss_utils import compute_correspondence_loss
-from models.pose.pointnet2.pointnet2_utils import QueryAndGroup
-from models.pose.pointnet2.pytorch_utils import SharedMLP, Conv1d
+from models.pose.transformer import SparseToDenseTransformer
+from models.pose.model_utils import compute_feature_similarity, compute_fine_Rt
+from models.pose.loss_utils import compute_correspondence_loss
+from models.pose.src_pointnet2.pointnet2_utils import QueryAndGroup
+from models.pose.src_pointnet2.pytorch_utils import SharedMLP, Conv1d
 
 
 class FinePointMatching(nn.Module):
@@ -14,23 +14,23 @@ class FinePointMatching(nn.Module):
         super(FinePointMatching, self).__init__()
         self.cfg = cfg
         self.return_feat = return_feat
-        self.nblock = self.cfg.nblock
+        self.nblock = cfg.NBLOCK
 
-        self.in_proj = nn.Linear(cfg.input_dim, cfg.hidden_dim)
-        self.out_proj = nn.Linear(cfg.hidden_dim, cfg.out_dim)
+        self.in_proj = nn.Linear(cfg.INPUT_DIM, cfg.HIDDEN_DIM)
+        self.out_proj = nn.Linear(cfg.HIDDEN_DIM, cfg.OUT_DIM)
 
-        self.bg_token = nn.Parameter(torch.randn(1, 1, cfg.hidden_dim) * .02)
-        self.PE = PositionalEncoding(cfg.hidden_dim, r1=cfg.pe_radius1, r2=cfg.pe_radius2)
+        self.bg_token = nn.Parameter(torch.randn(1, 1, cfg.HIDDEN_DIM) * .02)
+        self.PE = PositionalEncoding(cfg.HIDDEN_DIM, r1=cfg.PE_RADIUS1, r2=cfg.PE_RADIUS2)
 
         self.transformers = []
         for _ in range(self.nblock):
             self.transformers.append(SparseToDenseTransformer(
-                cfg.hidden_dim,
+                cfg.HIDDEN_DIM,
                 num_heads=4,
                 sparse_blocks=['self', 'cross'],
                 dropout=None,
                 activation_fn='ReLU',
-                focusing_factor=cfg.focusing_factor,
+                focusing_factor=cfg.FOCUSING_FACTOR,
                 with_bg_token=True,
                 replace_bg_token=True
             ))
@@ -44,16 +44,16 @@ class FinePointMatching(nn.Module):
         p1_ = (p1 - init_t.unsqueeze(1)) @ init_R
 
         f1 = self.in_proj(f1) + self.PE(p1_)
-        f1 = torch.cat([self.bg_token.repeat(B,1,1), f1], dim=1) # adding bg
+        f1 = torch.cat([self.bg_token.repeat(B, 1, 1), f1], dim=1)  # adding bg
 
         f2 = self.in_proj(f2) + self.PE(p2)
-        f2 = torch.cat([self.bg_token.repeat(B,1,1), f2], dim=1) # adding bg
+        f2 = torch.cat([self.bg_token.repeat(B, 1, 1), f2], dim=1)  # adding bg
 
         atten_list = []
         for idx in range(self.nblock):
             f1, f2 = self.transformers[idx](f1, geo1, fps_idx1, f2, geo2, fps_idx2)
 
-            if self.training or idx==self.nblock-1:
+            if self.training or idx == self.nblock - 1:
                 atten_list.append(compute_feature_similarity(
                     self.out_proj(f1),
                     self.out_proj(f2),
@@ -64,7 +64,7 @@ class FinePointMatching(nn.Module):
 
         if self.training:
             gt_R = end_points['rotation_label']
-            gt_t = end_points['translation_label'] / (radius.reshape(-1, 1)+1e-6)
+            gt_t = end_points['translation_label'] / (radius.reshape(-1, 1) + 1e-6)
 
             end_points = compute_correspondence_loss(
                 end_points, atten_list, p1, p2, gt_R, gt_t,
@@ -77,14 +77,13 @@ class FinePointMatching(nn.Module):
                 end_points['model'] / (radius.reshape(-1, 1, 1) + 1e-6),
             )
             end_points['pred_R'] = pred_R
-            end_points['pred_t'] = pred_t * (radius.reshape(-1, 1)+1e-6)
+            end_points['pred_t'] = pred_t * (radius.reshape(-1, 1) + 1e-6)
             end_points['pred_pose_score'] = pred_pose_score
 
         if self.return_feat:
             return end_points, self.out_proj(f1), self.out_proj(f2)
         else:
             return end_points
-
 
 
 class PositionalEncoding(nn.Module):
@@ -104,8 +103,8 @@ class PositionalEncoding(nn.Module):
 
         # scale1
         feat1 = self.group1(
-                pts1.contiguous(), pts2.contiguous(), pts1.transpose(1,2).contiguous()
-            )
+            pts1.contiguous(), pts2.contiguous(), pts1.transpose(1, 2).contiguous()
+        )
         feat1 = self.mlp1(feat1)
         feat1 = F.max_pool2d(
             feat1, kernel_size=[1, feat1.size(3)]
@@ -113,14 +112,13 @@ class PositionalEncoding(nn.Module):
 
         # scale2
         feat2 = self.group2(
-                pts1.contiguous(), pts2.contiguous(), pts1.transpose(1,2).contiguous()
-            )
+            pts1.contiguous(), pts2.contiguous(), pts1.transpose(1, 2).contiguous()
+        )
         feat2 = self.mlp2(feat2)
         feat2 = F.max_pool2d(
             feat2, kernel_size=[1, feat2.size(3)]
         )
 
         feat = torch.cat([feat1, feat2], dim=1).squeeze(-1)
-        feat = self.mlp3(feat).transpose(1,2)
+        feat = self.mlp3(feat).transpose(1, 2)
         return feat
-

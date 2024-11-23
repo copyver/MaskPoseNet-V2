@@ -7,8 +7,8 @@ import numpy as np
 from typing import Union, Dict, Optional, Tuple
 from einops import rearrange
 
-from model_utils import pairwise_distance
-from models.pose.pointnet2.pointnet2_utils import gather_operation
+from models.pose.model_utils import pairwise_distance
+from models.pose.src_pointnet2.pointnet2_utils import gather_operation
 
 NORM_LAYERS = {
     'BatchNorm1d': nn.BatchNorm1d,
@@ -286,17 +286,17 @@ class SinusoidalPositionalEmbedding(nn.Module):
 class GeometricStructureEmbedding(nn.Module):
     def __init__(self, cfg):
         super(GeometricStructureEmbedding, self).__init__()
-        self.sigma_d = cfg.sigma_d
-        self.sigma_a = cfg.sigma_a
-        self.factor_a = 180.0 / (self.sigma_a * np.pi)
-        self.angle_k = cfg.angle_k
+        self.sigma_d = cfg.SIGMA_D
+        self.sigma_a = cfg.SIGMA_A
+        self.factor_a = 180.0 / (cfg.SIGMA_A * np.pi)
+        self.angle_k = cfg.ANGLE_K
 
-        self.embedding = SinusoidalPositionalEmbedding(cfg.hidden_dim)
-        self.proj_d = nn.Linear(cfg.hidden_dim, cfg.hidden_dim)
-        self.proj_a = nn.Linear(cfg.hidden_dim, cfg.hidden_dim)
+        self.embedding = SinusoidalPositionalEmbedding(cfg.HIDDEN_DIM)
+        self.proj_d = nn.Linear(cfg.HIDDEN_DIM, cfg.HIDDEN_DIM)
+        self.proj_a = nn.Linear(cfg.HIDDEN_DIM, cfg.HIDDEN_DIM)
 
-        self.reduction_a = cfg.reduction_a
-        if self.reduction_a not in ['max', 'mean']:
+        self.reduction_a = cfg.REDUCTION_A
+        if self.reduction_a not in ['MAX', 'MEAN']:
             raise ValueError(f'Unsupported reduction mode: {self.reduction_a}.')
 
     @torch.no_grad()

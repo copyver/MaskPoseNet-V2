@@ -13,7 +13,6 @@ from models.pose.model_utils import (
 )
 
 
-
 class ViT(timm.models.vision_transformer.VisionTransformer):
     def __init__(self, **kwargs):
         super(ViT, self).__init__(**kwargs)
@@ -26,7 +25,7 @@ class ViT(timm.models.vision_transformer.VisionTransformer):
         out = []
         d = len(self.blocks)
         n = d // 4
-        idx_nblock = [d-1, d-n-1, d-2*n-1, d-3*n-1]
+        idx_nblock = [d - 1, d - n - 1, d - 2 * n - 1, d - 3 * n - 1]
 
         for idx, blk in enumerate(self.blocks):
             x = blk(x)
@@ -35,26 +34,25 @@ class ViT(timm.models.vision_transformer.VisionTransformer):
         return out
 
 
-
 class ViT_AE(nn.Module):
-    def __init__(self, cfg,) -> None:
+    def __init__(self, cfg, ) -> None:
         super(ViT_AE, self).__init__()
         self.cfg = cfg
-        self.vit_type = cfg.vit_type
-        self.up_type = cfg.up_type
-        self.embed_dim = cfg.embed_dim
-        self.out_dim = cfg.out_dim
-        self.use_pyramid_feat = cfg.use_pyramid_feat
-        self.pretrained = cfg.pretrained
+        self.vit_type = cfg.VIT_TYPE
+        self.up_type = cfg.UP_TYPE
+        self.embed_dim = cfg.EMBED_DIM
+        self.out_dim = cfg.OUT_DIM
+        self.use_pyramid_feat = cfg.USE_PYRAMID_FEAT
+        self.pretrained = cfg.PRETRAINED
 
-        if self.vit_type == 'vit_base':
+        if self.vit_type == 'VIT_BASE':
             self.vit = ViT(
-                    patch_size=16, embed_dim=self.embed_dim, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True,
-                    norm_layer=partial(nn.LayerNorm, eps=1e-6),)
-        elif self.vit_type == 'vit_large':
+                patch_size=16, embed_dim=self.embed_dim, depth=12, num_heads=12, mlp_ratio=4, qkv_bias=True,
+                norm_layer=partial(nn.LayerNorm, eps=1e-6), )
+        elif self.vit_type == 'VIT_LARGE':
             self.vit = ViT(
-                    patch_size=16, embed_dim=self.embed_dim, depth=24, num_heads=16, mlp_ratio=4, qkv_bias=True,
-                    norm_layer=partial(nn.LayerNorm, eps=1e-6), )
+                patch_size=16, embed_dim=self.embed_dim, depth=24, num_heads=16, mlp_ratio=4, qkv_bias=True,
+                norm_layer=partial(nn.LayerNorm, eps=1e-6), )
         else:
             assert False
 
@@ -63,24 +61,25 @@ class ViT_AE(nn.Module):
         else:
             nblock = 1
 
-        if self.up_type == 'linear':
+        if self.up_type == 'LINEAR':
             self.output_upscaling = nn.Linear(self.embed_dim * nblock, 16 * self.out_dim, bias=True)
-        elif self.up_type == 'deconv':
+        elif self.up_type == 'DECONV':
             self.output_upscaling = nn.Sequential(
-                nn.ConvTranspose2d(self.embed_dim * nblock, self.out_dim*2, kernel_size=2, stride=2),
-                LayerNorm2d(self.out_dim*2),
+                nn.ConvTranspose2d(self.embed_dim * nblock, self.out_dim * 2, kernel_size=2, stride=2),
+                LayerNorm2d(self.out_dim * 2),
                 nn.GELU(),
-                nn.ConvTranspose2d(self.out_dim*2, self.out_dim, kernel_size=2, stride=2),
+                nn.ConvTranspose2d(self.out_dim * 2, self.out_dim, kernel_size=2, stride=2),
             )
         else:
             assert False
 
         if self.pretrained:
-            vit_checkpoint = os.path.join('checkpoints', 'mae_pretrain_'+ self.vit_type +'.pth')
+            vit_checkpoint = os.path.join('checkpoints', 'mae_pretrain_' + self.vit_type.lower() + '.pth')
             if not os.path.isdir(vit_checkpoint):
                 if not os.path.isdir('checkpoints'):
                     os.makedirs('checkpoints')
-                model_zoo.load_url('https://dl.fbaipublicfiles.com/mae/pretrain/mae_pretrain_'+ self.vit_type +'.pth', 'checkpoints')
+                model_zoo.load_url('https://dl.fbaipublicfiles.com/mae/pretrain/mae_pretrain_' + self.vit_type.lower() + '.pth',
+                                   'checkpoints')
 
             checkpoint = torch.load(vit_checkpoint, map_location='cpu')
             print("load pre-trained checkpoint from: %s" % vit_checkpoint)
@@ -94,12 +93,11 @@ class ViT_AE(nn.Module):
             interpolate_pos_embed(self.vit, checkpoint_model)
             msg = self.vit.load_state_dict(checkpoint_model, strict=False)
 
-
     def forward(self, x):
-        B,_,H,W = x.size()
+        B, _, H, W = x.size()
         vit_outs = self.vit(x)
-        cls_tokens = vit_outs[-1][:,0,:].contiguous()
-        vit_outs = [l[:,1:,:].contiguous() for l in vit_outs]
+        cls_tokens = vit_outs[-1][:, 0, :].contiguous()
+        vit_outs = [l[:, 1:, :].contiguous() for l in vit_outs]
 
         if self.use_pyramid_feat:
             x = torch.cat(vit_outs, dim=2)
@@ -107,16 +105,14 @@ class ViT_AE(nn.Module):
             x = vit_outs[-1]
 
         if self.up_type == 'linear':
-            x = self.output_upscaling(x).reshape(B,14,14,4,4,self.out_dim).permute(0,5,1,3,2,4).contiguous()
-            x = x.reshape(B,-1,56,56)
-            x = F.interpolate(x, (H,W), mode="bilinear", align_corners=False)
+            x = self.output_upscaling(x).reshape(B, 14, 14, 4, 4, self.out_dim).permute(0, 5, 1, 3, 2, 4).contiguous()
+            x = x.reshape(B, -1, 56, 56)
+            x = F.interpolate(x, (H, W), mode="bilinear", align_corners=False)
         elif self.up_type == 'deconv':
-            x = x.transpose(1,2).reshape(B,-1,14,14)
+            x = x.transpose(1, 2).reshape(B, -1, 14, 14)
             x = self.output_upscaling(x)
-            x = F.interpolate(x, (H,W), mode="bilinear", align_corners=False)
+            x = F.interpolate(x, (H, W), mode="bilinear", align_corners=False)
         return x, cls_tokens
-
-
 
 
 class ViTEncoder(nn.Module):
@@ -171,7 +167,7 @@ class ViTEncoder(nn.Module):
         if npoint is None:
             npoint = self.npoint
 
-        tem_feat_list =[]
+        tem_feat_list = []
         for tem, tem_choose in zip(tem_rgb_list, tem_choose_list):
             tem_feat_list.append(self.get_img_feats(tem, tem_choose))
 
@@ -179,6 +175,3 @@ class ViTEncoder(nn.Module):
         tem_feat = torch.cat(tem_feat_list, dim=1)
 
         return sample_pts_feats(tem_pts, tem_feat, npoint)
-
-
-

@@ -10,9 +10,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import pytorch_utils
 
-from pointnet2_3090 import pointnet2_utils
+from models.pose.src_pointnet2 import pointnet2_utils
 
-import ipdb
 
 if False:
     # Workaround for type hints without depending on the `typing` module
@@ -201,7 +200,6 @@ class PointnetFPModule(nn.Module):
             )  # (B, C2 + C1, n)
         else:
             new_features = interpolated_feats
-        # ipdb.set_trace()
 
         new_features = new_features.unsqueeze(-1)
         new_features = self.mlp(new_features)

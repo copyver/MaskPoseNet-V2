@@ -14,13 +14,12 @@ from __future__ import (
 import torch
 from torch.autograd import Function
 import torch.nn as nn
-import pytorch_utils as pt_utils
+import models.pose.src_pointnet2.pytorch_utils as pt_utils
 import sys
 
-try:
-    import builtins
-except:
-    import __builtin__ as builtins
+
+import builtins
+
 
 try:
     import pointnet2._ext as _ext

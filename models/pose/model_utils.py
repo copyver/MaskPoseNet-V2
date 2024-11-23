@@ -4,7 +4,7 @@ from torch.nn import functional as F
 
 import numpy as np
 
-from models.pose.pointnet2.pointnet2_utils import (
+from models.pose.src_pointnet2.pointnet2_utils import (
     gather_operation,
     furthest_point_sample,
 )
@@ -49,17 +49,16 @@ def interpolate_pos_embed(model, checkpoint_model):
             checkpoint_model['pos_embed'] = new_pos_embed
 
 
-
 def sample_pts_feats(pts, feats, npoint=2048, return_index=False):
     '''
         pts: B*N*3
         feats: B*N*C
     '''
     sample_idx = furthest_point_sample(pts, npoint)
-    pts = gather_operation(pts.transpose(1,2).contiguous(), sample_idx)
-    pts = pts.transpose(1,2).contiguous()
-    feats = gather_operation(feats.transpose(1,2).contiguous(), sample_idx)
-    feats = feats.transpose(1,2).contiguous()
+    pts = gather_operation(pts.transpose(1, 2).contiguous(), sample_idx)
+    pts = pts.transpose(1, 2).contiguous()
+    feats = gather_operation(feats.transpose(1, 2).contiguous(), sample_idx)
+    feats = feats.transpose(1, 2).contiguous()
     if return_index:
         return pts, feats, sample_idx
     else:
@@ -72,17 +71,17 @@ def get_chosen_pixel_feats(img, choose):
         pass
     elif len(shape) == 4:
         B, C, H, W = shape
-        img = img.reshape(B, C, H*W)
+        img = img.reshape(B, C, H * W)
     else:
         assert False
 
     choose = choose.unsqueeze(1).repeat(1, C, 1)
     x = torch.gather(img, 2, choose).contiguous()
-    return x.transpose(1,2).contiguous()
+    return x.transpose(1, 2).contiguous()
 
 
 def pairwise_distance(
-    x: torch.Tensor, y: torch.Tensor, normalized: bool = False, channel_first: bool = False
+        x: torch.Tensor, y: torch.Tensor, normalized: bool = False, channel_first: bool = False
 ) -> torch.Tensor:
     r"""Pairwise distance of two (batched) point clouds.
 
@@ -125,7 +124,7 @@ def compute_feature_similarity(feat1, feat2, type='cosine', temp=1.0, normalize_
         feat2 = F.normalize(feat2, p=2, dim=2)
 
     if type == 'cosine':
-        atten_mat = feat1 @ feat2.transpose(1,2)
+        atten_mat = feat1 @ feat2.transpose(1, 2)
     elif type == 'L2':
         atten_mat = torch.sqrt(pairwise_distance(feat1, feat2))
     else:
@@ -136,13 +135,11 @@ def compute_feature_similarity(feat1, feat2, type='cosine', temp=1.0, normalize_
     return atten_mat
 
 
-
 def aug_pose_noise(gt_r, gt_t,
-                std_rots=[15, 10, 5, 1.25, 1],
-                max_rot=45,
-                sel_std_trans=[0.2, 0.2, 0.2],
-                max_trans=0.8):
-
+                   std_rots=[15, 10, 5, 1.25, 1],
+                   max_rot=45,
+                   sel_std_trans=[0.2, 0.2, 0.2],
+                   max_trans=0.8):
     B = gt_r.size(0)
     device = gt_r.device
 
@@ -151,23 +148,23 @@ def aug_pose_noise(gt_r, gt_t,
     angles = angles.clamp(min=-max_rot, max=max_rot)
     ones = gt_r.new(B, 1, 1).zero_() + 1
     zeros = gt_r.new(B, 1, 1).zero_()
-    a1 = angles[:,0].reshape(B, 1, 1) * np.pi / 180.0
+    a1 = angles[:, 0].reshape(B, 1, 1) * np.pi / 180.0
     a1 = torch.cat(
         [torch.cat([torch.cos(a1), -torch.sin(a1), zeros], dim=2),
-        torch.cat([torch.sin(a1), torch.cos(a1), zeros], dim=2),
-        torch.cat([zeros, zeros, ones], dim=2)], dim=1
+         torch.cat([torch.sin(a1), torch.cos(a1), zeros], dim=2),
+         torch.cat([zeros, zeros, ones], dim=2)], dim=1
     )
-    a2 = angles[:,1].reshape(B, 1, 1) * np.pi / 180.0
+    a2 = angles[:, 1].reshape(B, 1, 1) * np.pi / 180.0
     a2 = torch.cat(
         [torch.cat([ones, zeros, zeros], dim=2),
-        torch.cat([zeros, torch.cos(a2), -torch.sin(a2)], dim=2),
-        torch.cat([zeros, torch.sin(a2), torch.cos(a2)], dim=2)], dim=1
+         torch.cat([zeros, torch.cos(a2), -torch.sin(a2)], dim=2),
+         torch.cat([zeros, torch.sin(a2), torch.cos(a2)], dim=2)], dim=1
     )
-    a3 = angles[:,2].reshape(B, 1, 1) * np.pi / 180.0
+    a3 = angles[:, 2].reshape(B, 1, 1) * np.pi / 180.0
     a3 = torch.cat(
         [torch.cat([torch.cos(a3), zeros, torch.sin(a3)], dim=2),
-        torch.cat([zeros, ones, zeros], dim=2),
-        torch.cat([-torch.sin(a3), zeros, torch.cos(a3)], dim=2)], dim=1
+         torch.cat([zeros, ones, zeros], dim=2),
+         torch.cat([-torch.sin(a3), zeros, torch.cos(a3)], dim=2)], dim=1
     )
     rand_rot = a1 @ a2 @ a3
 
@@ -179,18 +176,18 @@ def aug_pose_noise(gt_r, gt_t,
 
     rand_rot = gt_r @ rand_rot
     rand_trans = gt_t + rand_trans
-    rand_trans[:,2] = torch.clamp(rand_trans[:,2], min=1e-6)
+    rand_trans[:, 2] = torch.clamp(rand_trans[:, 2], min=1e-6)
 
     return rand_rot.detach(), rand_trans.detach()
 
 
 def compute_coarse_Rt(
-    atten,
-    pts1,
-    pts2,
-    model_pts=None,
-    n_proposal1=6000,
-    n_proposal2=300,
+        atten,
+        pts1,
+        pts2,
+        model_pts=None,
+        n_proposal1=6000,
+        n_proposal2=300,
 ):
     WSVD = WeightedProcrustes()
 
@@ -200,29 +197,29 @@ def compute_coarse_Rt(
 
     if model_pts is None:
         model_pts = pts2
-    expand_model_pts = model_pts.unsqueeze(1).repeat(1,n_proposal2,1,1).reshape(B*n_proposal2, -1, 3)
+    expand_model_pts = model_pts.unsqueeze(1).repeat(1, n_proposal2, 1, 1).reshape(B * n_proposal2, -1, 3)
 
     # compute soft assignment matrix
     pred_score = torch.softmax(atten, dim=2) * torch.softmax(atten, dim=1)
-    pred_label1 = torch.max(pred_score[:,1:,:], dim=2)[1]
-    pred_label2 = torch.max(pred_score[:,:,1:], dim=1)[1]
-    weights1 = (pred_label1>0).float()
-    weights2 = (pred_label2>0).float()
+    pred_label1 = torch.max(pred_score[:, 1:, :], dim=2)[1]
+    pred_label2 = torch.max(pred_score[:, :, 1:], dim=1)[1]
+    weights1 = (pred_label1 > 0).float()
+    weights2 = (pred_label2 > 0).float()
 
     pred_score = pred_score[:, 1:, 1:].contiguous()
     pred_score = pred_score * weights1.unsqueeze(2) * weights2.unsqueeze(1)
-    pred_score = pred_score.reshape(B, N1*N2) ** 1.5
+    pred_score = pred_score.reshape(B, N1 * N2) ** 1.5
 
     # sample pose hypothese
     cumsum_weights = torch.cumsum(pred_score, dim=1)
-    cumsum_weights /= (cumsum_weights[:, -1].unsqueeze(1).contiguous()+1e-8)
-    idx = torch.searchsorted(cumsum_weights, torch.rand(B, n_proposal1*3, device=device))
+    cumsum_weights /= (cumsum_weights[:, -1].unsqueeze(1).contiguous() + 1e-8)
+    idx = torch.searchsorted(cumsum_weights, torch.rand(B, n_proposal1 * 3, device=device))
     idx1, idx2 = idx.div(N2, rounding_mode='floor'), idx % N2
-    idx1 = torch.clamp(idx1, max=N1-1).unsqueeze(2).repeat(1,1,3)
-    idx2 = torch.clamp(idx2, max=N2-1).unsqueeze(2).repeat(1,1,3)
+    idx1 = torch.clamp(idx1, max=N1 - 1).unsqueeze(2).repeat(1, 1, 3)
+    idx2 = torch.clamp(idx2, max=N2 - 1).unsqueeze(2).repeat(1, 1, 3)
 
-    p1 = torch.gather(pts1, 1, idx1).reshape(B,n_proposal1,3,3).reshape(B*n_proposal1,3,3)
-    p2 = torch.gather(pts2, 1, idx2).reshape(B,n_proposal1,3,3).reshape(B*n_proposal1,3,3)
+    p1 = torch.gather(pts1, 1, idx1).reshape(B, n_proposal1, 3, 3).reshape(B * n_proposal1, 3, 3)
+    p2 = torch.gather(pts2, 1, idx2).reshape(B, n_proposal1, 3, 3).reshape(B * n_proposal1, 3, 3)
     pred_rs, pred_ts = WSVD(p2, p1, None)
     pred_rs = pred_rs.reshape(B, n_proposal1, 3, 3)
     pred_ts = pred_ts.reshape(B, n_proposal1, 1, 3)
@@ -231,28 +228,27 @@ def compute_coarse_Rt(
     p2 = p2.reshape(B, n_proposal1, 3, 3)
     dis = torch.norm((p1 - pred_ts) @ pred_rs - p2, dim=3).mean(2)
     idx = torch.topk(dis, n_proposal2, dim=1, largest=False)[1]
-    pred_rs = torch.gather(pred_rs, 1, idx.reshape(B,n_proposal2,1,1).repeat(1,1,3,3))
-    pred_ts = torch.gather(pred_ts, 1, idx.reshape(B,n_proposal2,1,1).repeat(1,1,1,3))
+    pred_rs = torch.gather(pred_rs, 1, idx.reshape(B, n_proposal2, 1, 1).repeat(1, 1, 3, 3))
+    pred_ts = torch.gather(pred_ts, 1, idx.reshape(B, n_proposal2, 1, 1).repeat(1, 1, 1, 3))
 
     # pose selection
     transformed_pts = (pts1.unsqueeze(1) - pred_ts) @ pred_rs
-    transformed_pts = transformed_pts.reshape(B*n_proposal2, -1, 3)
+    transformed_pts = transformed_pts.reshape(B * n_proposal2, -1, 3)
     dis = torch.sqrt(pairwise_distance(transformed_pts, expand_model_pts))
     dis = dis.min(2)[0].reshape(B, n_proposal2, -1)
     scores = weights1.unsqueeze(1).sum(2) / ((dis * weights1.unsqueeze(1)).sum(2) + + 1e-8)
     idx = scores.max(1)[1]
-    pred_R = torch.gather(pred_rs, 1, idx.reshape(B,1,1,1).repeat(1,1,3,3)).squeeze(1)
-    pred_t = torch.gather(pred_ts, 1, idx.reshape(B,1,1,1).repeat(1,1,1,3)).squeeze(2).squeeze(1)
+    pred_R = torch.gather(pred_rs, 1, idx.reshape(B, 1, 1, 1).repeat(1, 1, 3, 3)).squeeze(1)
+    pred_t = torch.gather(pred_ts, 1, idx.reshape(B, 1, 1, 1).repeat(1, 1, 1, 3)).squeeze(2).squeeze(1)
     return pred_R, pred_t
 
 
-
 def compute_fine_Rt(
-    atten,
-    pts1,
-    pts2,
-    model_pts=None,
-    dis_thres=0.15
+        atten,
+        pts1,
+        pts2,
+        model_pts=None,
+        dis_thres=0.15
 ):
     if model_pts is None:
         model_pts = pts2
@@ -260,10 +256,10 @@ def compute_fine_Rt(
     # compute pose
     WSVD = WeightedProcrustes(weight_thresh=0.0)
     assginment_mat = torch.softmax(atten, dim=2) * torch.softmax(atten, dim=1)
-    label1 = torch.max(assginment_mat[:,1:,:], dim=2)[1]
-    label2 = torch.max(assginment_mat[:,:,1:], dim=1)[1]
+    label1 = torch.max(assginment_mat[:, 1:, :], dim=2)[1]
+    label2 = torch.max(assginment_mat[:, :, 1:], dim=1)[1]
 
-    assginment_mat = assginment_mat[:, 1:, 1:] * (label1>0).float().unsqueeze(2) * (label2>0).float().unsqueeze(1)
+    assginment_mat = assginment_mat[:, 1:, 1:] * (label1 > 0).float().unsqueeze(2) * (label2 > 0).float().unsqueeze(1)
     # max_idx = torch.max(assginment_mat, dim=2, keepdim=True)[1]
     # pred_pts = torch.gather(pts2, 1, max_idx.expand_as(pts1))
     normalized_assginment_mat = assginment_mat / (assginment_mat.sum(2, keepdim=True) + 1e-6)
@@ -275,7 +271,7 @@ def compute_fine_Rt(
     # compute score
     pred_pts = (pts1 - pred_t.unsqueeze(1)) @ pred_R
     dis = torch.sqrt(pairwise_distance(pred_pts, model_pts)).min(2)[0]
-    mask = (label1>0).float()
+    mask = (label1 > 0).float()
     pose_score = (dis < dis_thres).float()
     pose_score = (pose_score * mask).sum(1) / (mask.sum(1) + 1e-8)
     pose_score = pose_score * mask.mean(1)
@@ -283,16 +279,15 @@ def compute_fine_Rt(
     return pred_R, pred_t, pose_score
 
 
-
 def weighted_procrustes(
-    src_points,
-    ref_points,
-    weights=None,
-    weight_thresh=0.0,
-    eps=1e-5,
-    return_transform=False,
-    src_centroid = None,
-    ref_centroid = None,
+        src_points,
+        ref_points,
+        weights=None,
+        weight_thresh=0.0,
+        eps=1e-5,
+        return_transform=False,
+        src_centroid=None,
+        ref_centroid=None,
 ):
     r"""Compute rigid transformation from `src_points` to `ref_points` using weighted SVD.
 
@@ -370,7 +365,7 @@ class WeightedProcrustes(nn.Module):
         self.eps = eps
         self.return_transform = return_transform
 
-    def forward(self, src_points, tgt_points, weights=None,src_centroid = None,ref_centroid = None):
+    def forward(self, src_points, tgt_points, weights=None, src_centroid=None, ref_centroid=None):
         return weighted_procrustes(
             src_points,
             tgt_points,
@@ -381,4 +376,3 @@ class WeightedProcrustes(nn.Module):
             src_centroid=src_centroid,
             ref_centroid=ref_centroid
         )
-

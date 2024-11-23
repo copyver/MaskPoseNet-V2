@@ -4,7 +4,7 @@ from collections import defaultdict
 import numpy as np
 import torch.utils.data as data
 
-from data_utils import _isArrayLike
+from data.dataset.data_utils import _isArrayLike
 
 
 class DatasetBase(data.Dataset):

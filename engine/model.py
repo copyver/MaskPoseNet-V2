@@ -5,13 +5,12 @@ import inspect
 from typing import Dict, List, Union
 from pathlib import Path
 import os
-from models import PoseModel,SegModel
-from engine import PoseTrainer,PosePredictor,PoseValidator, SegTrainer, SegPredictor, SegValidator
-
-
+from models import PoseModel, SegModel
+from engine import PoseTrainer, PosePredictor, PoseValidator, SegTrainer, SegPredictor, SegValidator
 
 RANK = int(os.getenv("RANK", -1))
 LOCAL_RANK = int(os.getenv("LOCAL_RANK", -1))
+
 
 class Model(nn.Module):
     def __init__(
@@ -56,16 +55,63 @@ class Model(nn.Module):
 
         """
         cfg_dict = yaml_model_load(cfg)
-        self.cfg = cfg
+        self.cfg = cfg_dict
         self.task = task
-        self.model = self._smart_load("model")(cfg_dict, verbose=verbose and RANK == -1)  # build model
-        self.overrides["model"] = self.cfg
-        self.overrides["task"] = self.task
+        self.model = self._smart_load("model")(cfg_dict.POSE_MODEL, verbose=verbose and RANK == -1)  # build model
 
-        # Below added to allow export from YAMLs
-        self.model.args = cfg_dict  # combine default and model args (prefer model args)
-        self.model.task = self.task
-        self.model_name = cfg
+
+    def train(self, trainer=None, **kwargs):
+        self._check_is_pytorch_model()
+
+        args = {**self.cfg, "mode": "train"}  # highest priority args on the right
+        if args.get("resume"):
+            args["resume"] = self.ckpt_path
+
+        self.trainer = (trainer or self._smart_load("trainer"))(overrides=args, _callbacks=self.callbacks)
+        if not args.get("resume"):  # manually set model only if not resuming
+            self.trainer.model = self.trainer.get_model(weights=self.model if self.ckpt else None, cfg=self.model.yaml)
+            self.model = self.trainer.model
+
+        self.trainer.hub_session = self.session  # attach optional HUB session
+        self.trainer.train()
+        # Update model and cfg after training
+        if RANK in {-1, 0}:
+            ckpt = self.trainer.best if self.trainer.best.exists() else self.trainer.last
+            self.model, _ = attempt_load_one_weight(ckpt)
+            self.overrides = self.model.args
+            self.metrics = getattr(self.trainer.validator, "metrics", None)  # TODO: no metrics returned by DDP
+        return self.metrics
+
+    def _check_is_pytorch_model(self) -> None:
+        """
+        Checks if the model is a PyTorch model and raises a TypeError if it's not.
+
+        This method verifies that the model is either a PyTorch module or a .pt file. It's used to ensure that
+        certain operations that require a PyTorch model are only performed on compatible model types.
+
+        Raises:
+            TypeError: If the model is not a PyTorch module or a .pt file. The error message provides detailed
+                information about supported model formats and operations.
+
+        Examples:
+            >>> model = Model("yolo11n.pt")
+            >>> model._check_is_pytorch_model()  # No error raised
+            >>> model = Model("yolov8n.onnx")
+            >>> model._check_is_pytorch_model()  # Raises TypeError
+        """
+        pt_str = isinstance(self.model, (str, Path)) and Path(self.model).suffix == ".pt"
+        pt_module = isinstance(self.model, nn.Module)
+        if not (pt_module or pt_str):
+            raise TypeError(
+                f"model='{self.model}' should be a *.pt PyTorch model to run this method, but is a different format. "
+                f"PyTorch models can train, val, predict and export, i.e. 'model.train(data=...)', but exported "
+                f"formats like ONNX, TensorRT etc. only support 'predict' and 'val' modes, "
+                f"i.e. 'yolo predict model=yolov8n.onnx'.\nTo run CUDA or MPS inference please pass the device "
+                f"argument directly in your inference command, i.e. 'model.predict(source=..., device=0)'"
+            )
+
+
+
 
     def _smart_load(self, key: str):
         """
@@ -103,8 +149,7 @@ class Model(nn.Module):
             "pose": {
                 "model": PoseModel,
                 "trainer": PoseTrainer,
-                "validator":PoseValidator,
+                "validator": PoseValidator,
                 "predictor": PosePredictor,
             },
         }
-

@@ -7,8 +7,8 @@ import torch
 import torchvision.transforms as transforms
 from albumentations.core.transforms_interface import ImageOnlyTransform
 
-from base_dataset import DatasetBase
-from data_utils import (
+from data.dataset.base_dataset import DatasetBase
+from data.dataset.data_utils import (
     convert_blender_to_pyrender,
     load_color_image,
     load_depth_image,
@@ -279,13 +279,13 @@ class PoseNetDataset(DatasetBase):
 
 if __name__ == "__main__":
     import random
-    from easydict import EasyDict
+    from easydict import EasyDict as edict
     import yaml
     from data.dataloader.build_dataloader import BuildDataloader
 
     with open('../../cfg/base.yaml', 'r') as f:
         cfg_dict = yaml.safe_load(f)
-    cfg = EasyDict(cfg_dict)
+    cfg = edict(cfg_dict)
 
 
     # 测试代码
