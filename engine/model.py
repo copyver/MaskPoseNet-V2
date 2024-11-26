@@ -1,5 +1,5 @@
 import torch
-from nn.tasks import yaml_model_load
+from utils import yaml_model_load
 import torch.nn as nn
 import inspect
 from typing import Dict, List, Union
@@ -8,8 +8,10 @@ import os
 from models import PoseModel, SegModel
 from engine import PoseTrainer, PosePredictor, PoseValidator, SegTrainer, SegPredictor, SegValidator
 
-RANK = int(os.getenv("RANK", -1))
-LOCAL_RANK = int(os.getenv("LOCAL_RANK", -1))
+from utils.torch_utils import (
+    RANK,
+    LOCAL_RANK,
+)
 
 
 class Model(nn.Module):
@@ -72,7 +74,6 @@ class Model(nn.Module):
             self.trainer.model = self.trainer.get_model(weights=self.model if self.ckpt else None, cfg=self.model.yaml)
             self.model = self.trainer.model
 
-        self.trainer.hub_session = self.session  # attach optional HUB session
         self.trainer.train()
         # Update model and cfg after training
         if RANK in {-1, 0}:
@@ -92,12 +93,6 @@ class Model(nn.Module):
         Raises:
             TypeError: If the model is not a PyTorch module or a .pt file. The error message provides detailed
                 information about supported model formats and operations.
-
-        Examples:
-            >>> model = Model("yolo11n.pt")
-            >>> model._check_is_pytorch_model()  # No error raised
-            >>> model = Model("yolov8n.onnx")
-            >>> model._check_is_pytorch_model()  # Raises TypeError
         """
         pt_str = isinstance(self.model, (str, Path)) and Path(self.model).suffix == ".pt"
         pt_module = isinstance(self.model, nn.Module)
@@ -109,8 +104,6 @@ class Model(nn.Module):
                 f"i.e. 'yolo predict model=yolov8n.onnx'.\nTo run CUDA or MPS inference please pass the device "
                 f"argument directly in your inference command, i.e. 'model.predict(source=..., device=0)'"
             )
-
-
 
 
     def _smart_load(self, key: str):
