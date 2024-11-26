@@ -10,7 +10,7 @@ _ext_include_dir = os.path.join(this_dir, _ext_src_root, "include")
 _ext_sources = glob.glob(f"{_ext_src_root}/src/*.cpp") + glob.glob(f"{_ext_src_root}/src/*.cu")
 _ext_headers = glob.glob(f"{_ext_include_dir}/*")
 
-# 设置 CUDA 架构列表（RTX 4090: 8.9）
+# 设置 CUDA 架构列表（RTX 4090: 8.9, RTX 4060 : 8.6）
 if "TORCH_CUDA_ARCH_LIST" not in os.environ:
     os.environ["TORCH_CUDA_ARCH_LIST"] = "8.9"
 

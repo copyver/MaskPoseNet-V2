@@ -1,9 +1,16 @@
-from loguru import logger
 import os
+import random
+
+import numpy as np
+import torch
+from loguru import logger
+from contextlib import contextmanager
+import torch.distributed as dist
 
 NUM_THREADS = min(8, max(1, os.cpu_count() - 1))
 RANK = int(os.getenv("RANK", -1))
 LOCAL_RANK = int(os.getenv("LOCAL_RANK", -1))
+
 
 def get_gpu_info(index):
     """Return a string with system GPU information, i.e. 'Tesla T4, 15102MiB'."""
@@ -103,7 +110,7 @@ def select_device(device="", batch=0):
         for i, d in enumerate(devices):
             logger.info(f"CUDA:{d}: ({get_gpu_info(i)})\n")
         arg = "cuda:0"
-    elif mps and TORCH_2_0 and torch.backends.mps.is_available():
+    elif mps and torch.backends.mps.is_available():
         # Prefer MPS if available
         logger.info(f"MPS ({get_cpu_info()})\n")
         arg = "mps"
@@ -124,3 +131,15 @@ def init_seeds(seed=0):
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)  # for Multi-GPU, exception safe
+
+
+@contextmanager
+def torch_distributed_zero_first(local_rank: int):
+    """Ensures all processes in distributed training wait for the local master (rank 0) to complete a task first."""
+    initialized = dist.is_available() and dist.is_initialized()
+
+    if initialized and local_rank not in {-1, 0}:
+        dist.barrier(device_ids=[local_rank])
+    yield
+    if initialized and local_rank == 0:
+        dist.barrier(device_ids=[local_rank])

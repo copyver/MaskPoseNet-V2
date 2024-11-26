@@ -1,16 +1,14 @@
-import torch
-from utils import yaml_model_load
-import torch.nn as nn
 import inspect
-from typing import Dict, List, Union
 from pathlib import Path
-import os
-from models import PoseModel, SegModel
-from engine import PoseTrainer, PosePredictor, PoseValidator, SegTrainer, SegPredictor, SegValidator
+from typing import Union
 
+import torch.nn as nn
+
+from engine import PoseTrainer, PosePredictor, PoseValidator, SegTrainer, SegPredictor, SegValidator
+from models import PoseModel, SegModel
+from utils import yaml_model_load
 from utils.torch_utils import (
     RANK,
-    LOCAL_RANK,
 )
 
 
