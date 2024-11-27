@@ -57,9 +57,9 @@ class FinePointMatching(nn.Module):
                 atten_list.append(compute_feature_similarity(
                     self.out_proj(f1),
                     self.out_proj(f2),
-                    self.cfg.sim_type,
-                    self.cfg.temp,
-                    self.cfg.normalize_feat
+                    self.cfg.SIM_TYPE,
+                    self.cfg.TEMP,
+                    self.cfg.NORMALIZE_FEAT
                 ))
 
         if self.training:
@@ -68,7 +68,7 @@ class FinePointMatching(nn.Module):
 
             end_points = compute_correspondence_loss(
                 end_points, atten_list, p1, p2, gt_R, gt_t,
-                dis_thres=self.cfg.loss_dis_thres,
+                dis_thres=self.cfg.LOSS_DIS_THRES,
                 loss_str='fine'
             )
         else:

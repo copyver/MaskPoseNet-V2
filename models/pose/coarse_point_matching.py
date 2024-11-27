@@ -50,9 +50,9 @@ class CoarsePointMatching(nn.Module):
                 atten_list.append(compute_feature_similarity(
                     self.out_proj(f1),
                     self.out_proj(f2),
-                    self.cfg.sim_type,
-                    self.cfg.temp,
-                    self.cfg.normalize_feat
+                    self.cfg.SIM_TYPE,
+                    self.cfg.TEMP,
+                    self.cfg.NORMALIZE_FEAT
                 ))
 
         if self.training:
@@ -62,14 +62,14 @@ class CoarsePointMatching(nn.Module):
 
             end_points = compute_correspondence_loss(
                 end_points, atten_list, p1, p2, gt_R, gt_t,
-                dis_thres=self.cfg.loss_dis_thres,
+                dis_thres=self.cfg.LOSS_DIS_THRES,
                 loss_str='coarse'
             )
         else:
             init_R, init_t = compute_coarse_Rt(
                 atten_list[-1], p1, p2,
                 end_points['model'] / (radius.reshape(-1, 1, 1) + 1e-6),
-                self.cfg.nproposal1, self.cfg.nproposal2,
+                self.cfg.NPROPOSAL1, self.cfg.NPROPOSAL2,
             )
         end_points['init_R'] = init_R
         end_points['init_t'] = init_t

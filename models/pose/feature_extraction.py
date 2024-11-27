@@ -104,11 +104,11 @@ class ViT_AE(nn.Module):
         else:
             x = vit_outs[-1]
 
-        if self.up_type == 'linear':
+        if self.up_type == 'LINEAR':
             x = self.output_upscaling(x).reshape(B, 14, 14, 4, 4, self.out_dim).permute(0, 5, 1, 3, 2, 4).contiguous()
             x = x.reshape(B, -1, 56, 56)
             x = F.interpolate(x, (H, W), mode="bilinear", align_corners=False)
-        elif self.up_type == 'deconv':
+        elif self.up_type == 'DECONV':
             x = x.transpose(1, 2).reshape(B, -1, 14, 14)
             x = self.output_upscaling(x)
             x = F.interpolate(x, (H, W), mode="bilinear", align_corners=False)

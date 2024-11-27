@@ -110,7 +110,7 @@ def pairwise_distance(
     return sq_distances
 
 
-def compute_feature_similarity(feat1, feat2, type='cosine', temp=1.0, normalize_feat=True):
+def compute_feature_similarity(feat1, feat2, type='COSINE', temp=1.0, normalize_feat=True):
     r'''
     Args:
         feat1 (Tensor): (B, N, C)
@@ -123,7 +123,7 @@ def compute_feature_similarity(feat1, feat2, type='cosine', temp=1.0, normalize_
         feat1 = F.normalize(feat1, p=2, dim=2)
         feat2 = F.normalize(feat2, p=2, dim=2)
 
-    if type == 'cosine':
+    if type == 'COSINE':
         atten_mat = feat1 @ feat2.transpose(1, 2)
     elif type == 'L2':
         atten_mat = torch.sqrt(pairwise_distance(feat1, feat2))
