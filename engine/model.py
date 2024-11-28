@@ -1,8 +1,8 @@
 import inspect
+import torch.nn as nn
+from loguru import logger
 from pathlib import Path
 from typing import Union
-
-import torch.nn as nn
 
 from engine import PoseTrainer, PosePredictor, PoseValidator, SegTrainer, SegPredictor, SegValidator
 from models import PoseModel, SegModel
@@ -63,9 +63,9 @@ class Model(nn.Module):
     def train(self, trainer=None, **kwargs):
         self._check_is_pytorch_model()
 
-        args = {**self.cfg, "mode": "train"}  # highest priority args on the right
-        if args.get("resume"):
-            args["resume"] = self.ckpt_path
+        self.cfg.IS_TRAIN = True
+        if self.cfg.get("RESUME"):
+            self.cfg.RESUME = self.ckpt_path
 
         self.trainer = (trainer or self._smart_load("trainer"))(overrides=args, _callbacks=self.callbacks)
         if not args.get("resume"):  # manually set model only if not resuming
