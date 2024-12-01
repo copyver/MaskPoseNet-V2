@@ -1,8 +1,16 @@
-from loguru import logger
+import datetime
+import math
+import time
 from pathlib import Path
 
+import numpy as np
+import torch
+from loguru import logger
+from torch import distributed as dist
+from torch import optim
+from tqdm import tqdm
+
 from data.dataloader.build_dataloader import BuildDataloader
-from data.dataset.posenet_dataset import PoseNetDataset
 from utils import yaml_print, yaml_save
 from utils.log_utils import TensorBoardWriter
 from utils.torch_utils import (
@@ -11,6 +19,7 @@ from utils.torch_utils import (
     torch_distributed_zero_first,
     RANK,
     LOCAL_RANK,
+    one_cycle,
 )
 
 
@@ -66,8 +75,10 @@ class BaseTrainer:
         self.plot_idx = [0, 1, 2]
 
     def train(self):
-        _set_up_train()
+        self._set_up_train()
 
+        nb = len(self.train_dataloader)  # number of batches
+        nw = max(round(self.SOLVERS.WARMUP_EPOCHS * nb), 100) if self.SOLVERS.WARMUP_EPOCHS > 0 else -1  # warmup iterations
         last_opt_step = -1
         self.epoch_time = None
         self.epoch_time_start = time.time()
@@ -78,23 +89,14 @@ class BaseTrainer:
         self.optimizer.zero_grad()  # zero any resumed gradients to ensure stability on train start
         while True:
             self.epoch = epoch
-            self.run_callbacks("on_train_epoch_start")
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")  # suppress 'Detected lr_scheduler.step() before optimizer.step()'
-                self.scheduler.step()
+            self.scheduler.step()
 
             self.model.train()
-            if RANK != -1:
-                self.train_loader.sampler.set_epoch(epoch)
-            pbar = enumerate(self.train_loader)
-            # Update dataloader attributes (optional)
-            if epoch == (self.epochs - self.args.close_mosaic):
-                self._close_dataloader_mosaic()
-                self.train_loader.reset()
+            pbar = enumerate(self.train_dataloader)
 
             if RANK in {-1, 0}:
-                LOGGER.info(self.progress_string())
-                pbar = TQDM(enumerate(self.train_loader), total=nb)
+                logger.info(self.progress_string())
+                pbar = tqdm(enumerate(self.train_dataloader), total=nb)
             self.tloss = None
             for i, batch in pbar:
                 self.run_callbacks("on_train_batch_start")
@@ -202,7 +204,7 @@ class BaseTrainer:
         if RANK in {-1, 0}:
             # Do final val with best.pt
             seconds = time.time() - self.train_time_start
-            LOGGER.info(f"\n{epoch - self.start_epoch + 1} epochs completed in {seconds / 3600:.3f} hours.")
+            logger.info(f"\n{epoch - self.start_epoch + 1} epochs completed in {seconds / 3600:.3f} hours.")
             self.final_eval()
             if self.args.plots:
                 self.plot_metrics()
@@ -244,14 +246,14 @@ class BaseTrainer:
         # Check imgsz  Todo: add img size check
 
         # Dataloaders
-        build_dataloader_train = BuildDataloader(self.cfg, dataset, is_train=True)
+        build_dataloader_train = BuildDataloader(self.cfg, self.trainset, is_train=True)
         self.train_dataloader = build_dataloader_train.get_dataloader()
         self.train_data_size = build_dataloader_train.get_dataset_size()
         self.per_gpu_iter_num_per_epoch = self.train_data_size // self.batch_size
         logger.info(f"Training with {self.train_data_size} train images.")
         logger.info(f"Training per_gpu_iter_num_per_epoch {self.per_gpu_iter_num_per_epoch}")
         if RANK in {-1, 0}:
-            build_dataloader_test = BuildDataloader(self.cfg, dataset, is_train=False)
+            build_dataloader_test = BuildDataloader(self.cfg, self.testset, is_train=False)
             self.test_dataloader = build_dataloader_test.get_dataloader()
             self.test_data_size = build_dataloader_test.get_dataset_size()
             self.test_per_gpu_iter_num_per_epoch = self.test_data_size // self.batch_size
@@ -266,7 +268,33 @@ class BaseTrainer:
             tensorboard_log_dir = self.tensorboard_logs_dir / time_log
             self.tensorboard_writer = TensorBoardWriter(tensorboard_log_dir)
 
+        # Optimizer
+        self.accumulate = max(round(self.args.nbs / self.batch_size), 1)  # accumulate loss before optimizing
+        weight_decay = self.args.weight_decay * self.batch_size * self.accumulate / self.args.nbs  # scale weight_decay
+        iterations = math.ceil(len(self.train_loader.dataset) / max(self.batch_size, self.args.nbs)) * self.epochs
+        self.optimizer = self.build_optimizer(
+            model=self.model,
+            name=self.args.optimizer,
+            lr=self.args.lr0,
+            momentum=self.args.momentum,
+            decay=weight_decay,
+            iterations=iterations,
+        )
+        # Scheduler
+        self._setup_scheduler()
+        self.stopper, self.stop = EarlyStopping(patience=self.args.patience), False
+        self.resume_training(ckpt)
+        self.scheduler.last_epoch = self.start_epoch - 1  # do not move
+
         logger.info(f"Start training from epoch {self.start_epoch}")
+
+    def _setup_scheduler(self):
+        """Initialize training learning rate scheduler."""
+        if self.args.cos_lr:
+            self.lf = one_cycle(1, self.args.lrf, self.epochs)  # cosine 1->hyp['lrf']
+        else:
+            self.lf = lambda x: max(1 - x / self.epochs, 0) * (1.0 - self.args.lrf) + self.args.lrf  # linear
+        self.scheduler = optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=self.lf)
 
 
     def get_dataset(self):

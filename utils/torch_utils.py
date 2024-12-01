@@ -6,6 +6,7 @@ import torch
 from loguru import logger
 from contextlib import contextmanager
 import torch.distributed as dist
+import math
 
 NUM_THREADS = min(8, max(1, os.cpu_count() - 1))
 RANK = int(os.getenv("RANK", -1))
@@ -143,3 +144,8 @@ def torch_distributed_zero_first(local_rank: int):
     yield
     if initialized and local_rank == 0:
         dist.barrier(device_ids=[local_rank])
+
+
+def one_cycle(y1=0.0, y2=1.0, steps=100):
+    """Returns a lambda function for sinusoidal ramp from y1 to y2 https://arxiv.org/pdf/1812.01187.pdf."""
+    return lambda x: max((1 - math.cos(x * math.pi / steps)) / 2, 0) * (y2 - y1) + y1
