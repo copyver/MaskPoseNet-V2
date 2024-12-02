@@ -53,7 +53,6 @@ class PoseModel(nn.Module):
 
 
 if __name__ == '__main__':
-    import random
     from easydict import EasyDict as edict
     import yaml
     from data.dataloader.build_dataloader import BuildDataloader
