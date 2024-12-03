@@ -78,11 +78,11 @@ class BaseTrainer:
 
     def train(self):
         """Allow device='', device=None on Multi-GPU systems to default to device=0."""
-        if isinstance(self.cfg.device, str) and len(self.cfg.device):  # i.e. device='0' or device='0,1,2,3'
-            world_size = len(self.cfg.device.split(","))
-        elif isinstance(self.cfg.device, (tuple, list)):  # i.e. device=[0, 1, 2, 3] (multi-GPU from CLI is list)
-            world_size = len(self.cfg.device)
-        elif self.cfg.device in {"cpu", "mps"}:  # i.e. device='cpu' or 'mps'
+        if isinstance(self.cfg.DEVICE, str) and len(self.cfg.device):  # i.e. device='0' or device='0,1,2,3'
+            world_size = len(self.cfg.DEVICE.split(","))
+        elif isinstance(self.cfg.DEVICE, (tuple, list)):  # i.e. device=[0, 1, 2, 3] (multi-GPU from CLI is list)
+            world_size = len(self.cfg.DEVICE)
+        elif self.cfg.DEVICE in {"cpu", "mps"}:  # i.e. device='cpu' or 'mps'
             world_size = 0
         elif torch.cuda.is_available():  # i.e. device=None or device='' or device=number
             world_size = 1  # default to device 0
@@ -91,16 +91,14 @@ class BaseTrainer:
 
         # Run subprocess if DDP training, else train normally
         if world_size > 1 and "LOCAL_RANK" not in os.environ:
-            # Argument checks
-            if self.cfg.rect:
-                logger.warning("WARNING ⚠️ 'rect=True' is incompatible with Multi-GPU training, setting 'rect=False'")
-                self.cfg.rect = False
-            if self.cfg.batch < 1.0:
+            if self.cfg.TRAIN_DATALOADER.BATCH_SIZE < 1.0:
                 logger.warning(
-                    "WARNING ⚠️ 'batch<1' for AutoBatch is incompatible with Multi-GPU training, setting "
+                    "WARNING  'batch<1' for AutoBatch is incompatible with Multi-GPU training, setting "
                     "default 'batch=16'"
                 )
-                self.cfg.batch = 16
+                self.cfg.TRAIN_DATALOADER.BATCH_SIZE = 16
+
+        # Todo:run ddp training
 
         else:
             self._do_train(world_size)

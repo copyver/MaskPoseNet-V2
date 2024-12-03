@@ -26,7 +26,6 @@ class Model(nn.Module):
         self.ckpt = None  # if loaded from *.pt
         self.cfg = None  # if loaded from *.yaml
         self.ckpt_path = None
-        self.overrides = {}  # overrides for trainer object
         self.metrics = None  # validation/training metrics
         self.task = task  # task type
         model = str(model).strip()
@@ -59,6 +58,40 @@ class Model(nn.Module):
         self.task = task
         self.model = self._smart_load("model")(cfg_dict.POSE_MODEL, verbose=verbose and RANK == -1)  # build model
 
+    def _load(self, weights: str, task=None) -> None:
+        """
+        Loads a model from a checkpoint file or initializes it from a weights file.
+
+        This method handles loading models from either .pt checkpoint files or other weight file formats. It sets
+        up the model, task, and related attributes based on the loaded weights.
+
+        Args:
+            weights (str): Path to the model weights file to be loaded.
+            task (str | None): The task associated with the model. If None, it will be inferred from the model.
+
+        Raises:
+            FileNotFoundError: If the specified weights file does not exist or is inaccessible.
+            ValueError: If the weights file format is unsupported or invalid.
+
+        Examples:
+            >>> model = Model()
+            >>> model._load("yolo11n.pt")
+            >>> model._load("path/to/weights.pth", task="detect")
+        """
+        if Path(weights).suffix == ".pt":
+            self.model, self.ckpt = attempt_load_one_weight(weights)
+            self.task = self.model.args["task"]
+            self.overrides = self.model.args = self._reset_ckpt_args(self.model.args)
+            self.ckpt_path = self.model.pt_path
+        else:
+            weights = checks.check_file(weights)  # runs in all cases, not redundant with above call
+            self.model, self.ckpt = weights, None
+            self.task = task or guess_model_task(weights)
+            self.ckpt_path = weights
+        self.overrides["model"] = weights
+        self.overrides["task"] = self.task
+        self.model_name = weights
+
 
     def train(self, trainer=None, **kwargs):
         self._check_is_pytorch_model()
@@ -67,7 +100,7 @@ class Model(nn.Module):
         if self.cfg.get("RESUME"):
             self.cfg.RESUME = self.ckpt_path
 
-        self.trainer = (trainer or self._smart_load("trainer"))(overrides=args, _callbacks=self.callbacks)
+        self.trainer = (trainer or self._smart_load("trainer"))(cfg=self.cfg, model=self.model)
         if not args.get("resume"):  # manually set model only if not resuming
             self.trainer.model = self.trainer.get_model(weights=self.model if self.ckpt else None, cfg=self.model.yaml)
             self.model = self.trainer.model
