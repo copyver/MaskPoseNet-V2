@@ -32,12 +32,12 @@ class TensorBoardWriter(BaseWriter):
     def write(self, data:dict, iter:int):
         for key, value in data.items():
             # image data
-            if key is "images":
+            if key == "images":
                 assert isinstance(value, np.ndarray), "tensorboard images not support format {}".format(type(value))
                 self._writer.add_images(data["image_names"], value, iter)
             # loss map data ....
             else:
-                if isinstance(value, str) and key is "image_names":
+                if isinstance(value, str) and key == "image_names":
                     continue
 
                 assert isinstance(value, float), "tensorboard scalar not support format {}".format(type(value))

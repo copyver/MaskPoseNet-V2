@@ -56,7 +56,7 @@ class Model(nn.Module):
         cfg_dict = yaml_model_load(cfg)
         self.cfg = cfg_dict
         self.task = task
-        self.model = self._smart_load("model")(cfg_dict.POSE_MODEL, verbose=verbose and RANK == -1)  # build model
+        self.model = self._smart_load("model")(cfg_dict.POSE_MODEL)  # build model
 
     def _load(self, weights: str, task=None) -> None:
         """
@@ -101,7 +101,7 @@ class Model(nn.Module):
             self.cfg.RESUME = self.ckpt_path
 
         self.trainer = (trainer or self._smart_load("trainer"))(cfg=self.cfg, model=self.model)
-        if not args.get("resume"):  # manually set model only if not resuming
+        if not self.cfg.get("RESUME"):  # manually set model only if not resuming
             self.trainer.model = self.trainer.get_model(weights=self.model if self.ckpt else None, cfg=self.model.yaml)
             self.model = self.trainer.model
 
