@@ -2,7 +2,7 @@ import yaml
 from pathlib import Path
 from easydict import EasyDict as edict
 from loguru import logger
-from colorama import Fore, Style
+import re
 
 
 def colorstr(*input):
@@ -57,6 +57,36 @@ def colorstr(*input):
     }
     return "".join(colors[x] for x in args) + f"{string}" + colors["end"]
 
+
+def remove_colors(message):
+    """
+    移除日志消息中的 ANSI 转义字符，防止颜色转义码被写入日志文件。
+
+    Args:
+        message (str): 日志消息。
+
+    Returns:
+        str: 去除颜色转义字符后的日志消息。
+    """
+    # 匹配 ANSI 转义字符的正则表达式
+    ansi_escape = re.compile(r'\033\[[0-9;]*m')
+    return ansi_escape.sub('', message)
+
+
+def logger_format_function(record):
+    """
+    自定义格式化函数，移除 ANSI 转义字符。
+
+    Args:
+        record (dict): Loguru 的日志记录。
+
+    Returns:
+        str: 格式化后的日志字符串。
+    """
+    record["message"] = remove_colors(record["message"])  # 移除颜色转义字符
+    return "{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}\n".format(**record)
+
+
 def yaml_model_load(path):
     """Load a model config from a YAML file."""
     d = yaml_load(path)  # model dict
@@ -80,6 +110,21 @@ def yaml_load(file="base.yaml"):
         data = yaml.safe_load(s) or {}  # always return a dict (yaml.safe_load() may return None for empty files)
         return edict(data)
 
+def serialize_data(data):
+    """
+    Recursively convert unsupported data types into serializable formats.
+    """
+    if isinstance(data, (int, float, str, bool, type(None))):
+        return data
+    elif isinstance(data, (list, tuple)):
+        return [serialize_data(item) for item in data]
+    elif isinstance(data, dict):
+        return {key: serialize_data(value) for key, value in data.items()}
+    else:
+        # Convert unsupported types to strings
+        return str(data)
+
+
 def yaml_save(file="base.yaml", data=None, header=""):
     """
     Save YAML data to a file.
@@ -100,10 +145,11 @@ def yaml_save(file="base.yaml", data=None, header=""):
         file.parent.mkdir(parents=True, exist_ok=True)
 
     # Convert Path objects to strings
-    valid_types = int, float, str, bool, list, tuple, dict, type(None)
-    for k, v in data.items():
-        if not isinstance(v, valid_types):
-            data[k] = str(v)
+    # valid_types = int, float, str, bool, list, tuple, dict, type(None)
+    # for k, v in data.items():
+    #     if not isinstance(v, valid_types):
+    #         data[k] = str(v)
+    data = serialize_data(data)
 
     # Dump data to file in YAML format
     with open(file, "w", errors="ignore", encoding="utf-8") as f:
@@ -123,22 +169,24 @@ def yaml_print(configs):
         """递归打印字典内容，支持缩进和不同颜色显示"""
         indent = "  " * level
         for key, value in d.items():
-            colored_key = f"{Fore.GREEN}{key}{Style.RESET_ALL}"  # 绿色显示键
+            colored_key = colorstr("green", "bold", key)  # 绿色加粗显示键
             if isinstance(value, dict):
                 logger.info(f"{indent}{colored_key}:")
                 _print_dict(value, level + 1)  # 递归处理子字典
             else:
-                if isinstance(value, int):
-                    colored_value = f"{Fore.BLUE}{value}{Style.RESET_ALL}"  # 蓝色显示整数
+                if isinstance(value, bool):
+                    colored_value = colorstr("red", str(value))  # 红色显示布尔值
+                elif isinstance(value, int):
+                    colored_value = colorstr("blue", str(value))  # 蓝色显示整数
                 elif isinstance(value, float):
-                    colored_value = f"{Fore.CYAN}{value}{Style.RESET_ALL}"  # 青色显示浮点数
+                    colored_value = colorstr("cyan", str(value))  # 青色显示浮点数
                 elif isinstance(value, str):
-                    colored_value = f"{Fore.YELLOW}{value}{Style.RESET_ALL}"  # 黄色显示字符串
+                    colored_value = colorstr("yellow", value)  # 黄色显示字符串
                 else:
-                    colored_value = f"{Fore.MAGENTA}{value}{Style.RESET_ALL}"  # 紫色显示其他类型
+                    colored_value = colorstr("magenta", str(value))  # 紫色显示其他类型
                 logger.info(f"{indent}{colored_key}: {colored_value}")
 
-    logger.info(f"{Fore.WHITE}YAML Configuration:{Style.RESET_ALL}")
+    logger.info(colorstr("white", "bold", "YAML Configuration:"))
     _print_dict(configs)
 
 

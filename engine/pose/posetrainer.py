@@ -1,4 +1,5 @@
 from engine import BaseTrainer
+from data.dataset.posenet_dataset import PoseNetDataset
 
 class PoseTrainer(BaseTrainer):
     def __init__(self, cfg, model):

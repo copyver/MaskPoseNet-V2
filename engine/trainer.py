@@ -3,6 +3,7 @@ import math
 import time
 from pathlib import Path
 import subprocess
+import sys
 import numpy as np
 import torch
 from loguru import logger
@@ -11,7 +12,7 @@ from torch import optim
 from tqdm import tqdm
 import os
 from data.dataloader.build_dataloader import BuildDataloader
-from utils import yaml_print, yaml_save, colorstr
+from utils import yaml_print, yaml_save, logger_format_function
 from utils.log_utils import TensorBoardWriter
 from utils.torch_utils import (
     select_device,
@@ -37,25 +38,25 @@ class BaseTrainer:
         self.validator = None
         self.metrics = None
         self.plots = {}
-        init_seeds(self.SOLVERS.SEED + 1 + RANK)
+        init_seeds(self.cfg.SOLVERS.SEED + 1 + RANK)
 
         self.output_dir = Path(self.cfg.SOLVERS.OUTPUT_DIR)
         self.logs_name = self.cfg.SOLVERS.LOGS_NAME
-        self.tensorboard_logs_dir = self.output_dir / self.LOGS_NAME / self.cfg.SOLVERS.TENSORBOARD_LOGS_DIR
-        self.checkpoint_dir = self.output_dir / self.cfg.LOGS.NAME / self.cfg.SOLVERS.CHECKPOINTS_DIR
-        logger.add(self.tensorboard_logs_dir / "log.txt", format="{time} {level} {message}")
+        self.tensorboard_logs_dir = self.output_dir / self.cfg.LOGS_NAME / self.cfg.SOLVERS.TENSORBOARD_LOGS_DIR
+        self.checkpoint_dir = self.output_dir / self.cfg.LOGS_NAME / self.cfg.SOLVERS.CHECKPOINTS_DIR
+        logger.add(self.tensorboard_logs_dir / "log.txt", format=logger_format_function)
         if RANK in {-1, 0}:
             self.checkpoint_dir.mkdir(parents=True, exist_ok=True)  # make dir
-            yaml_save(self.save_dir / "cfg.yaml", vars(self.cfg))
+            yaml_save(self.tensorboard_logs_dir / "cfg.yaml", dict(self.cfg))
 
         self.save_epoch_freq = self.cfg.SOLVERS.SAVE_EPOCH_FREQ
         self.print_freq = self.cfg.SOLVERS.PRINT_FREQ
 
-        self.batch_size = self.TRAIN_DATALOADER.BATCH_SIZE
-        self.epochs = self.SOLVERS.EPOCHS or 100  # in case users accidentally pass epochs=None with timed training
-        self.start_epoch = self.SOLVERS.START_EPOCH or 0
+        self.batch_size = self.cfg.TRAIN_DATALOADER.BATCH_SIZE
+        self.epochs = self.cfg.SOLVERS.EPOCHS or 100  # in case users accidentally pass epochs=None with timed training
+        self.start_epoch = self.cfg.SOLVERS.START_EPOCH or 0
         if RANK == -1:
-            yaml_print(vars(self.cfg))
+            yaml_print(dict(self.cfg))
 
         # Model and Dataset
         self.model = model
