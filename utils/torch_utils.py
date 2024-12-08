@@ -1,16 +1,33 @@
+import math
 import os
 import random
+from contextlib import contextmanager
 
 import numpy as np
 import torch
-from loguru import logger
-from contextlib import contextmanager
 import torch.distributed as dist
-import math
+from loguru import logger
+
+from utils.checks import check_version
 
 NUM_THREADS = min(8, max(1, os.cpu_count() - 1))
 RANK = int(os.getenv("RANK", -1))
 LOCAL_RANK = int(os.getenv("LOCAL_RANK", -1))
+TORCH_2_4 = check_version(torch.__version__, "2.4.0")
+
+
+def convert_optimizer_state_dict_to_fp16(state_dict):
+    """
+    Converts the state_dict of a given optimizer to FP16, focusing on the 'state' key for tensor conversions.
+
+    This method aims to reduce storage size without altering 'param_groups' as they contain non-tensor data.
+    """
+    for state in state_dict["state"].values():
+        for k, v in state.items():
+            if k != "step" and isinstance(v, torch.Tensor) and v.dtype is torch.float32:
+                state[k] = v.half()
+
+    return state_dict
 
 
 def autocast(enabled: bool):
@@ -27,7 +44,8 @@ def autocast(enabled: bool):
         (torch.amp.autocast): The appropriate autocast context manager.
 
     """
-    return torch.cuda.amp.autocast(enabled)
+    return torch.amp.autocast('cuda', enabled=enabled)
+
 
 def get_gpu_info(index):
     """Return a string with system GPU information, i.e. 'Tesla T4, 15102MiB'."""
@@ -211,3 +229,16 @@ class EarlyStopping:
                 f"i.e. `patience=300` or use `patience=0` to disable EarlyStopping."
             )
         return stop
+
+
+def print_model_summary(model, verbose=False):
+    # 打印模型的结构
+    logger.info(f"\n===== Model Structure =====\n{model}")
+
+    total_params = 0
+    for name, param in model.named_parameters():
+        if verbose:
+            logger.info(f"Name: {name}, Shape: {param.shape}, Requires Grad: {param.requires_grad}")
+        total_params += param.numel()
+
+    logger.info(f"Total number of parameters: {total_params}")

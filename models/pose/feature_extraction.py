@@ -1,10 +1,12 @@
 import os
+from functools import partial
+
+import timm.models.vision_transformer
 import torch
 import torch.nn as nn
-from torch.nn import functional as F
 import torch.utils.model_zoo as model_zoo
-from functools import partial
-import timm.models.vision_transformer
+from torch.nn import functional as F
+
 from models.pose.model_utils import (
     LayerNorm2d,
     interpolate_pos_embed,
@@ -74,12 +76,12 @@ class ViT_AE(nn.Module):
             assert False
 
         if self.pretrained:
-            vit_checkpoint = os.path.join('checkpoints', 'mae_pretrain_' + self.vit_type.lower() + '.pth')
+            vit_checkpoint = os.path.join('models/pose/checkpoints', 'mae_pretrain_' + self.vit_type.lower() + '.pth')
             if not os.path.isdir(vit_checkpoint):
-                if not os.path.isdir('checkpoints'):
-                    os.makedirs('checkpoints')
+                if not os.path.isdir('models/pose/checkpoints'):
+                    os.makedirs('models/pose/checkpoints', exist_ok=True)
                 model_zoo.load_url('https://dl.fbaipublicfiles.com/mae/pretrain/mae_pretrain_' + self.vit_type.lower() + '.pth',
-                                   'checkpoints')
+                                   'models/pose/checkpoints')
 
             checkpoint = torch.load(vit_checkpoint, map_location='cpu')
             print("load pre-trained checkpoint from: %s" % vit_checkpoint)

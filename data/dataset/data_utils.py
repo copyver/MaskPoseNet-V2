@@ -4,6 +4,7 @@ import time
 
 import cv2
 import numpy as np
+from loguru import logger
 from pycocotools import mask as mask_utils
 
 """
@@ -45,12 +46,12 @@ def load_anns(dataset_dir, subset, annotation_key):
     assert annotation_key in ["scene_camera.json", "scene_instances_gt.json", "scene_pose_gt.json"], \
         f'Annotation file format {annotation_key} not supported.'
     annotations_file = os.path.join(dataset_dir, subset, annotation_key)
-    print(f'Loading {annotation_key} into memory...')
+    logger.info(f'Loading {annotation_key} into memory...')
     tic = time.time()
     with open(annotations_file, 'r') as f:
         dataset = json.load(f)
     assert isinstance(dataset, dict), f'Annotation file format {type(dataset)} not supported.'
-    print(f'Done {annotation_key} (t={time.time() - tic:0.2f}s)')
+    logger.info(f'Done {annotation_key} (t={time.time() - tic:0.2f}s)')
     return dataset
 
 

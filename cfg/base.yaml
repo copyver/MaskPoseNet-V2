@@ -14,21 +14,23 @@ SOLVERS:
   SAVE_EPOCH_FREQ: 10
   PRINT_FREQ: 10
   EPOCHS: 100
-  START_EPOCH: 1
+  START_EPOCH: 0
   WARMUP_EPOCHS: 0
+  NOMINAL_BATCH_SIZE: 64
+  PATIENCE: 0
+  TIME: 0
+  VAL: False
+  SAVE: False
 
 OPTIMIZER:
-  TYPE: ADAM
-  LR: 0.0001
-  BETAS: [ 0.5, 0.999 ]
-  EPS: 0.000001
+  TYPE: Adam
+  LR: 0.001
+  MOMENTUM: 0.5
   WEIGHT_DECAY: 0.0
 
 LR_SCHEDULER:
-  TYPE: WARMUPCOSINELR
-  MAX_ITERS: 600000
-  WARMUP_FACTOR: 0.001
-  WARMUP_ITERS: 1000
+  TYPE: cosine
+  LRF: 0.0001
 
 POSE_MODEL:
   COARSE_NPOINT: 196
@@ -69,9 +71,10 @@ POSE_MODEL:
     SIM_TYPE: COSINE
     NORMALIZE_FEAT: TRUE
     LOSS_DIS_THRES: 0.15
+  FREEZE:
 
 TRAIN_DATASET:
-  DATA_DIR: "/home/lhy/datasets"
+  DATA_DIR: "/home/yhlever/DeepLearning/6D_object_pose_estimation/Datasets/HANDLE"
   DATASET_DIR: "datasets_handle_4000t_800v"
   MODEL_DIR: "models"
   TEMPLATE_DIR: "templates"
@@ -95,11 +98,11 @@ TRAIN_DATALOADER:
   PIN_MEMORY: FALSE
 
 TEST_DATASET:
-  NAME: BOP_TEST_DATASET
-  DATA_DIR: ../DATA/BOP
-  DATASET_DIR: datasets
-  MODEL_DIR: models
+  DATA_DIR: "/home/yhlever/DeepLearning/6D_object_pose_estimation/Datasets/HANDLE"
+  DATASET_DIR: "datasets_handle_4000t_800v"
+  MODEL_DIR: "datasets_handle_1000test"
   TEMPLATE_DIR: templates
+  DEPTH_SCALE: 5.0
   IMG_SIZE: 224
   N_SAMPLE_OBSERVED_POINT: 2048
   N_SAMPLE_MODEL_POINT: 1024

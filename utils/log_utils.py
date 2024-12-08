@@ -1,9 +1,11 @@
-import numpy as np
 from pathlib import Path
+
+import numpy as np
 
 
 class BaseWriter:
     """ base class  to write train or test logs"""
+
     def write(self, data, iter):
         """
         Args
@@ -14,6 +16,7 @@ class BaseWriter:
 
     def close(self):
         pass
+
 
 class TensorBoardWriter(BaseWriter):
     def __init__(self, log_dir: (str, Path), window_size: int = 20, **kwargs):
@@ -29,7 +32,7 @@ class TensorBoardWriter(BaseWriter):
 
         self._writer = SummaryWriter(log_dir, **kwargs)
 
-    def write(self, data:dict, iter:int):
+    def write(self, data: dict, iter: int):
         for key, value in data.items():
             # image data
             if key == "images":

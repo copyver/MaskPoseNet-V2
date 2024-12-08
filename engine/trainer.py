@@ -1,17 +1,21 @@
 import datetime
 import math
+import os
 import time
+from copy import deepcopy
 from pathlib import Path
-import subprocess
-import sys
+
 import numpy as np
 import torch
+import torch.nn as nn
 from loguru import logger
 from torch import distributed as dist
 from torch import optim
 from tqdm import tqdm
-import os
+
 from data.dataloader.build_dataloader import BuildDataloader
+from nn.tasks import attempt_load_one_weight
+from utils import colorstr
 from utils import yaml_print, yaml_save, logger_format_function
 from utils.log_utils import TensorBoardWriter
 from utils.torch_utils import (
@@ -23,6 +27,8 @@ from utils.torch_utils import (
     one_cycle,
     autocast,
     EarlyStopping,
+    TORCH_2_4,
+    convert_optimizer_state_dict_to_fp16,
 )
 
 
@@ -31,8 +37,9 @@ class BaseTrainer:
     Base class for all trainers
     """
 
-    def __init__(self, cfg, model):
+    def __init__(self, cfg, model, callbacks=None):
         self.cfg = cfg
+        self.callbacks = callbacks
         self.is_train = self.cfg.IS_TRAIN
         self.device = select_device(device=cfg.SOLVERS.DEVICE, batch=cfg.TRAIN_DATALOADER.BATCH_SIZE)
         self.validator = None
@@ -52,6 +59,7 @@ class BaseTrainer:
         self.save_epoch_freq = self.cfg.SOLVERS.SAVE_EPOCH_FREQ
         self.print_freq = self.cfg.SOLVERS.PRINT_FREQ
 
+        self.nbs = self.cfg.SOLVERS.NOMINAL_BATCH_SIZE
         self.batch_size = self.cfg.TRAIN_DATALOADER.BATCH_SIZE
         self.epochs = self.cfg.SOLVERS.EPOCHS or 100  # in case users accidentally pass epochs=None with timed training
         self.start_epoch = self.cfg.SOLVERS.START_EPOCH or 0
@@ -74,16 +82,16 @@ class BaseTrainer:
         self.loss = None
         self.tloss = None
         self.loss_names = ["Loss"]
-        self.csv = self.save_dir / "results.csv"
+        self.csv = self.tensorboard_logs_dir / "results.csv"
         self.plot_idx = [0, 1, 2]
 
     def train(self):
         """Allow device='', device=None on Multi-GPU systems to default to device=0."""
-        if isinstance(self.cfg.DEVICE, str) and len(self.cfg.device):  # i.e. device='0' or device='0,1,2,3'
-            world_size = len(self.cfg.DEVICE.split(","))
-        elif isinstance(self.cfg.DEVICE, (tuple, list)):  # i.e. device=[0, 1, 2, 3] (multi-GPU from CLI is list)
-            world_size = len(self.cfg.DEVICE)
-        elif self.cfg.DEVICE in {"cpu", "mps"}:  # i.e. device='cpu' or 'mps'
+        if isinstance(self.cfg.SOLVERS.DEVICE, str) and len(self.cfg.SOLVERS.DEVICE):  # i.e. device='0' or device='0,1,2,3'
+            world_size = len(self.cfg.SOLVERS.DEVICE.split(","))
+        elif isinstance(self.cfg.SOLVERS.DEVICE, (tuple, list)):  # i.e. device=[0, 1, 2, 3] (multi-GPU from CLI is list)
+            world_size = len(self.cfg.SOLVERS.DEVICE)
+        elif self.cfg.SOLVERS.DEVICE in {"cpu", "mps"}:  # i.e. device='cpu' or 'mps'
             world_size = 0
         elif torch.cuda.is_available():  # i.e. device=None or device='' or device=number
             world_size = 1  # default to device 0
@@ -107,26 +115,28 @@ class BaseTrainer:
     def _do_train(self, world_size):
         self._set_up_train()
 
-        nb = len(self.train_dataloader)  # number of batches
-        nw = max(round(self.SOLVERS.WARMUP_EPOCHS * nb),
-                 100) if self.SOLVERS.WARMUP_EPOCHS > 0 else -1  # warmup iterations
+        nb = self.per_gpu_iter_num_per_epoch  # number of batches
+        nw = max(round(self.cfg.SOLVERS.WARMUP_EPOCHS * nb),
+                 100) if self.cfg.SOLVERS.WARMUP_EPOCHS > 0 else -1  # warmup iterations
         last_opt_step = -1
         self.epoch_time = None
         self.epoch_time_start = time.time()
         self.train_time_start = time.time()
+        self.run_callbacks("on_train_start")
 
         epoch = self.start_epoch
 
         self.optimizer.zero_grad()  # zero any resumed gradients to ensure stability on train start
         while True:
             self.epoch = epoch
+            self.run_callbacks("on_train_epoch_start")
             self.scheduler.step()
 
             self.model.train()
             pbar = enumerate(self.train_dataloader)
 
             if RANK in {-1, 0}:
-                logger.info(self.progress_string())
+                logger.info(self.progress_string())   # Todo: add function
                 pbar = tqdm(enumerate(self.train_dataloader), total=nb)
             self.tloss = None
             for i, batch in pbar:
@@ -147,7 +157,8 @@ class BaseTrainer:
                 # Forward
                 with autocast(self.amp):
                     batch = self.preprocess_batch(batch)
-                    self.loss, self.loss_items = self.model(batch)
+                    self.loss, self.loss_items, dict_info_step = self._step(batch)
+                    # self.loss, self.loss_items = self.model(batch)
                     if RANK != -1:
                         self.loss *= world_size
                     self.tloss = (
@@ -155,6 +166,7 @@ class BaseTrainer:
                     )
 
                 # Backward
+                # self.loss.backward()
                 self.scaler.scale(self.loss).backward()
 
                 # Optimize - https://pytorch.org/docs/master/notes/amp_examples.html
@@ -163,8 +175,8 @@ class BaseTrainer:
                     last_opt_step = ni
 
                     # Timed stopping
-                    if self.cfg.time:
-                        self.stop = (time.time() - self.train_time_start) > (self.cfg.time * 3600)
+                    if self.cfg.SOLVERS.TIME:
+                        self.stop = (time.time() - self.train_time_start) > (self.cfg.SOLVERS.TIME * 3600)
                         if RANK != -1:  # if DDP training
                             broadcast_list = [self.stop if RANK == 0 else None]
                             dist.broadcast_object_list(broadcast_list, 0)  # broadcast 'stop' to all ranks
@@ -181,13 +193,13 @@ class BaseTrainer:
                             f"{epoch + 1}/{self.epochs}",
                             f"{self._get_memory():.3g}G",  # (GB) GPU memory util
                             *(self.tloss if loss_length > 1 else torch.unsqueeze(self.tloss, 0)),  # losses
-                            batch["cls"].shape[0],  # batch size, i.e. 8
-                            batch["img"].shape[-1],  # imgsz, i.e 640
+                            batch["pts"].shape[0],  # batch size, i.e. 8
+                            batch["rgb"].shape[-1],  # imgsz, i.e 640
                         )
                     )
                     self.run_callbacks("on_batch_end")
-                    if self.cfg.plots and ni in self.plot_idx:
-                        self.plot_training_samples(batch, ni)
+                    # if self.cfg.plots and ni in self.plot_idx:   # Todo: add plots
+                    #     self.plot_training_samples(batch, ni)
 
                 self.run_callbacks("on_train_batch_end")
 
@@ -195,10 +207,10 @@ class BaseTrainer:
             self.run_callbacks("on_train_epoch_end")
             if RANK in {-1, 0}:
                 final_epoch = epoch + 1 >= self.epochs
-                self.ema.update_attr(self.model, include=["yaml", "nc", "cfg", "names", "stride", "class_weights"])
+                # self.ema.update_attr(self.model, include=["yaml", "nc", "cfg", "names", "stride", "class_weights"])
 
                 # Validation
-                if self.cfg.val or final_epoch or self.stopper.possible_stop or self.stop:
+                if self.cfg.SOLVERS.VAL or final_epoch or self.stopper.possible_stop or self.stop:
                     self.metrics, self.fitness = self.validate()
                 self.save_metrics(metrics={**self.label_loss_items(self.tloss), **self.metrics, **self.lr})
                 self.stop |= self.stopper(epoch + 1, self.fitness) or final_epoch
@@ -243,6 +255,102 @@ class BaseTrainer:
         self._clear_memory()
         self.run_callbacks("teardown")
 
+    def save_model(self):
+        """Save model training checkpoints with additional metadata."""
+        import io
+
+        # Serialize ckpt to a byte buffer once (faster than repeated torch.save() calls)
+        buffer = io.BytesIO()
+        torch.save(
+            {
+                "epoch": self.epoch,
+                "best_fitness": self.best_fitness,
+                "model": None,  # resume and final checkpoints derive from EMA
+                # "ema": deepcopy(self.ema.ema).half(),
+                "updates": self.ema.updates,
+                "optimizer": convert_optimizer_state_dict_to_fp16(deepcopy(self.optimizer.state_dict())),
+                "train_args": vars(self.cfg),  # save as dict
+                "train_metrics": {**self.metrics, **{"fitness": self.fitness}},
+                "train_results": self.read_results_csv(),
+                "date": datetime.now().isoformat(),
+                # "version": __version__,
+                # "license": "AGPL-3.0 (https://ultralytics.com/license)",
+                # "docs": "https://docs.ultralytics.com",
+            },
+            buffer,
+        )
+        serialized_ckpt = buffer.getvalue()  # get the serialized content to save
+
+        # Save checkpoints
+        self.last.write_bytes(serialized_ckpt)  # save last.pt
+        if self.best_fitness == self.fitness:
+            self.best.write_bytes(serialized_ckpt)  # save best.pt
+        if (self.save_period > 0) and (self.epoch % self.save_period == 0):
+            (self.wdir / f"epoch{self.epoch}.pt").write_bytes(serialized_ckpt)  # save epoch, i.e. 'epoch3.pt'
+        # if self.args.close_mosaic and self.epoch == (self.epochs - self.args.close_mosaic - 1):
+        #    (self.wdir / "last_mosaic.pt").write_bytes(serialized_ckpt)  # save mosaic checkpoint
+
+    def read_results_csv(self):
+        """Read results.csv into a dict using pandas."""
+        import pandas as pd  # scope for faster 'import ultralytics'
+
+        return pd.read_csv(self.csv).to_dict(orient="list")
+
+    def save_metrics(self, metrics):
+        """Saves training metrics to a CSV file."""
+        keys, vals = list(metrics.keys()), list(metrics.values())
+        n = len(metrics) + 2  # number of cols
+        s = "" if self.csv.exists() else (("%s," * n % tuple(["epoch", "time"] + keys)).rstrip(",") + "\n")  # header
+        t = time.time() - self.train_time_start
+        with open(self.csv, "a") as f:
+            f.write(s + ("%.6g," * n % tuple([self.epoch + 1, t] + vals)).rstrip(",") + "\n")
+
+    def progress_string(self):
+        """Returns a formatted string of training progress with epoch, GPU memory, loss, instances and size."""
+        raise NotImplementedError("progress_string function is not implemented in trainer")
+
+    def label_loss_items(self, loss_items=None, prefix="train"):
+        """
+        Returns a loss dict with labelled training loss items tensor.
+
+        Note:
+            This is not needed for classification but necessary for segmentation & detection
+        """
+        return {"loss": loss_items} if loss_items is not None else ["loss"]
+
+    def optimizer_step(self):
+        """Perform a single step of the training optimizer with gradient clipping and EMA update."""
+        self.scaler.unscale_(self.optimizer)  # unscale gradients
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=10.0)  # clip gradients
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
+        self.optimizer.zero_grad()
+
+    def _get_memory(self):
+        """Get accelerator memory utilization in GB."""
+        if self.device.type == "mps":
+            memory = torch.mps.driver_allocated_memory()
+        elif self.device.type == "cpu":
+            memory = 0
+        else:
+            memory = torch.cuda.memory_reserved()
+        return memory / 1e9
+
+    def run_callbacks(self, event: str):
+        """Run all existing callbacks associated with a particular event."""
+        for callback in self.callbacks.get(event, []):
+            callback(self)
+
+    def preprocess_batch(self, batch):
+        """Allows custom preprocessing model inputs and ground truths depending on task type."""
+        return batch
+
+    def _step(self, data):
+        raise NotImplementedError("_step function is not implemented in trainer")
+
+    def _set_up_loss(self):
+        raise NotImplementedError("_set_up_loss function is not implemented in trainer")
+
     def _set_up_train(self, world_size=1):
         """Builds dataloaders and optimizer on correct rank process."""
         # Model
@@ -251,12 +359,14 @@ class BaseTrainer:
         self.model = self.model.to(self.device)
         # self.set_model_attributes
 
+        self.loss_function = self._set_up_loss()
+
         # Freeze Layers   Todo: add freeze layer
         freeze_list = (
-            self.cfg.freeze
-            if isinstance(self.cfg.freeze, list)
-            else range(self.cfg.freeze)
-            if isinstance(self.cfg.freeze, int)
+            self.cfg.POSE_MODEL.FREEZE
+            if isinstance(self.cfg.POSE_MODEL.FREEZE, list)
+            else range(self.cfg.POSE_MODEL.FREEZE)
+            if isinstance(self.cfg.POSE_MODEL.FREEZE, int)
             else []
         )
         always_freeze_names = []  # always freeze these layers
@@ -273,6 +383,24 @@ class BaseTrainer:
                 v.requires_grad = True
 
         # AMP  Todo: add amp
+        # self.amp = torch.tensor(self.args.amp).to(self.device)  # True or False
+        # if self.amp and RANK in {-1, 0}:  # Single-GPU and DDP
+        #     callbacks_backup = callbacks.default_callbacks.copy()  # backup callbacks as check_amp() resets them
+        #     self.amp = torch.tensor(check_amp(self.model), device=self.device)
+        #     callbacks.default_callbacks = callbacks_backup  # restore callbacks
+        # if RANK > -1 and world_size > 1:  # DDP
+        #     dist.broadcast(self.amp,
+        #                    src=0)  # broadcast the tensor from rank 0 to all other ranks (returns None)
+        # self.amp = bool(self.amp)  # as boolean
+        # self.scaler = (
+        #     torch.amp.GradScaler("cuda", enabled=self.amp) if TORCH_2_4 else torch.cuda.amp.GradScaler(
+        #         enabled=self.amp)
+        # )
+        self.amp = False
+        self.scaler = (
+            torch.amp.GradScaler("cuda", enabled=self.amp) if TORCH_2_4 else torch.cuda.amp.GradScaler(enabled=self.amp)
+        )
+
 
         # Check imgsz  Todo: add img size check
 
@@ -300,24 +428,102 @@ class BaseTrainer:
             self.tensorboard_writer = TensorBoardWriter(tensorboard_log_dir)
 
         # Optimizer
-        self.accumulate = max(round(self.cfg.nbs / self.batch_size), 1)  # accumulate loss before optimizing
-        weight_decay = self.cfg.weight_decay * self.batch_size * self.accumulate / self.cfg.nbs  # scale weight_decay
-        iterations = math.ceil(len(self.train_loader.dataset) / max(self.batch_size, self.cfg.nbs)) * self.epochs
+        self.accumulate = max(round(self.nbs / self.batch_size), 1)  # accumulate loss before optimizing
+        weight_decay = self.cfg.OPTIMIZER.WEIGHT_DECAY * self.batch_size * self.accumulate / self.nbs  # scale weight_decay
+        iterations = math.ceil(self.train_data_size / max(self.batch_size, self.nbs)) * self.epochs
         self.optimizer = self.build_optimizer(
             model=self.model,
-            name=self.cfg.optimizer,
-            lr=self.cfg.lr0,
-            momentum=self.cfg.momentum,
+            name=self.cfg.OPTIMIZER.TYPE,
+            lr=self.cfg.OPTIMIZER.LR,
+            momentum=self.cfg.OPTIMIZER.MOMENTUM,
             decay=weight_decay,
             iterations=iterations,
         )
         # Scheduler
         self._setup_scheduler()
-        self.stopper, self.stop = EarlyStopping(patience=self.cfg.patience), False
+        self.stopper, self.stop = EarlyStopping(patience=self.cfg.SOLVERS.PATIENCE), False
         self.resume_training(ckpt)
         self.scheduler.last_epoch = self.start_epoch - 1  # do not move
 
         logger.info(f"Start training from epoch {self.start_epoch}")
+
+    def setup_model(self):
+        """Load/create/download model for any task."""
+        if isinstance(self.model, torch.nn.Module):  # if model is loaded beforehand. No setup needed
+            return
+
+        cfg, weights = self.model, None
+        ckpt = None
+        if str(self.model).endswith(".pt"):
+            weights, ckpt = attempt_load_one_weight(self.model)
+            cfg = weights.yaml
+        elif isinstance(self.args.pretrained, (str, Path)):
+            weights, _ = attempt_load_one_weight(self.args.pretrained)
+        self.model = self.get_model(cfg=cfg, weights=weights, verbose=RANK == -1)  # calls Model(cfg, weights)
+        return ckpt
+
+    def build_optimizer(self, model, name="auto", lr=0.001, momentum=0.9, decay=1e-5, iterations=1e5):
+        """
+        Constructs an optimizer for the given model, based on the specified optimizer name, learning rate, momentum,
+        weight decay, and number of iterations.
+
+        Args:
+            model (torch.nn.Module): The model for which to build an optimizer.
+            name (str, optional): The name of the optimizer to use. If 'auto', the optimizer is selected
+                based on the number of iterations. Default: 'auto'.
+            lr (float, optional): The learning rate for the optimizer. Default: 0.001.
+            momentum (float, optional): The momentum factor for the optimizer. Default: 0.9.
+            decay (float, optional): The weight decay for the optimizer. Default: 1e-5.
+            iterations (float, optional): The number of iterations, which determines the optimizer if
+                name is 'auto'. Default: 1e5.
+
+        Returns:
+            (torch.optim.Optimizer): The constructed optimizer.
+        """
+        g = [], [], []  # optimizer parameter groups
+        bn = tuple(v for k, v in nn.__dict__.items() if "Norm" in k)  # normalization layers, i.e. BatchNorm2d()
+        if name == "auto":
+            logger.info(
+                f"{colorstr('optimizer:')} 'optimizer=auto' found, "
+                f"ignoring 'lr0={self.args.lr0}' and 'momentum={self.args.momentum}' and "
+                f"determining best 'optimizer', 'lr0' and 'momentum' automatically... "
+            )
+            nc = getattr(model, "nc", 10)  # number of classes
+            lr_fit = round(0.002 * 5 / (4 + nc), 6)  # lr0 fit equation to 6 decimal places
+            name, lr, momentum = ("SGD", 0.01, 0.9) if iterations > 10000 else ("AdamW", lr_fit, 0.9)
+            self.args.warmup_bias_lr = 0.0  # no higher than 0.01 for Adam
+
+        for module_name, module in model.named_modules():
+            for param_name, param in module.named_parameters(recurse=False):
+                fullname = f"{module_name}.{param_name}" if module_name else param_name
+                if "bias" in fullname:  # bias (no decay)
+                    g[2].append(param)
+                elif isinstance(module, bn):  # weight (no decay)
+                    g[1].append(param)
+                else:  # weight (with decay)
+                    g[0].append(param)
+
+        optimizers = {"Adam", "Adamax", "AdamW", "NAdam", "RAdam", "RMSProp", "SGD", "auto"}
+        name = {x.lower(): x for x in optimizers}.get(name.lower())
+        if name in {"Adam", "Adamax", "AdamW", "NAdam", "RAdam"}:
+            optimizer = getattr(optim, name, optim.Adam)(g[2], lr=lr, betas=(momentum, 0.999), weight_decay=0.0)
+        elif name == "RMSProp":
+            optimizer = optim.RMSprop(g[2], lr=lr, momentum=momentum)
+        elif name == "SGD":
+            optimizer = optim.SGD(g[2], lr=lr, momentum=momentum, nesterov=True)
+        else:
+            raise NotImplementedError(
+                f"Optimizer '{name}' not found in list of available optimizers {optimizers}. "
+                "Request support for addition optimizers at https://github.com/ultralytics/ultralytics."
+            )
+
+        optimizer.add_param_group({"params": g[0], "weight_decay": decay})  # add g0 with weight_decay
+        optimizer.add_param_group({"params": g[1], "weight_decay": 0.0})  # add g1 (BatchNorm2d weights)
+        logger.info(
+            f"{colorstr('optimizer:')} {type(optimizer).__name__}(lr={lr}, momentum={momentum}) with parameter groups "
+            f'{len(g[1])} weight(decay=0.0), {len(g[0])} weight(decay={decay}), {len(g[2])} bias(decay=0.0)'
+        )
+        return optimizer
 
     def resume_training(self, ckpt):
         """Resume  training from given epoch and best fitness."""
@@ -348,10 +554,10 @@ class BaseTrainer:
 
     def _setup_scheduler(self):
         """Initialize training learning rate scheduler."""
-        if self.cfg.cos_lr:
-            self.lf = one_cycle(1, self.cfg.lrf, self.epochs)  # cosine 1->hyp['lrf']
+        if self.cfg.LR_SCHEDULER.TYPE == 'cosine':
+            self.lf = one_cycle(1, self.cfg.LR_SCHEDULER.LRF, self.epochs)  # cosine 1->hyp['lrf']
         else:
-            self.lf = lambda x: max(1 - x / self.epochs, 0) * (1.0 - self.cfg.lrf) + self.cfg.lrf  # linear
+            self.lf = lambda x: max(1 - x / self.epochs, 0) * (1.0 - self.cfg.LR_SCHEDULER.LRF) + self.cfg.LR_SCHEDULER.LRF  # linear
         self.scheduler = optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=self.lf)
 
     def get_dataset(self):

@@ -6,6 +6,7 @@ import numpy as np
 import torch
 import torchvision.transforms as transforms
 from albumentations.core.transforms_interface import ImageOnlyTransform
+from loguru import logger
 
 from data.dataset.base_dataset import DatasetBase
 from data.dataset.data_utils import (
@@ -43,19 +44,19 @@ class PoseNetDataset(DatasetBase):
     def __init__(self, cfg, is_train=True):
         super().__init__(cfg, is_train)
         self.cfg = cfg
-
         self.data_dir = cfg.DATA_DIR
-        self.num_img_per_epoch = cfg.NUM_IMG_PER_EPOCH
-        self.min_visib_px = cfg.MIN_PX_COUNT_VISIB
-        self.min_visib_frac = cfg.MIN_VISIB_FRACT
-        self.dilate_mask = cfg.DILATE_MASK
+        # self.num_img_per_epoch = cfg.NUM_IMG_PER_EPOCH
+        # self.min_visib_px = cfg.MIN_PX_COUNT_VISIB
+        # self.min_visib_frac = cfg.MIN_VISIB_FRACT
         self.depth_scale = cfg.DEPTH_SCALE
         self.rgb_mask_flag = cfg.RGB_MASK_FLAG
-        self.shift_range = cfg.SHIFT_RANGE
         self.img_size = cfg.IMG_SIZE
         self.n_sample_observed_point = cfg.N_SAMPLE_OBSERVED_POINT
         self.n_sample_model_point = cfg.N_SAMPLE_MODEL_POINT
         self.n_sample_template_point = cfg.N_SAMPLE_TEMPLATE_POINT
+        if self.is_train:
+            self.shift_range = cfg.SHIFT_RANGE
+            self.dilate_mask = cfg.DILATE_MASK
 
         self.dataset_dir = os.path.join(self.data_dir, cfg.DATASET_DIR)
         self.model_dir = os.path.join(self.data_dir, cfg.MODEL_DIR)
@@ -79,7 +80,7 @@ class PoseNetDataset(DatasetBase):
         if self.is_train:
             self.load_data("train")
         else:
-            self.load_data("test")
+            self.load_data("val")
 
     def load_data(self, subset: str = "train"):
         image_dir = os.path.join(self.dataset_dir, subset, "images", "color_ims")
@@ -113,8 +114,8 @@ class PoseNetDataset(DatasetBase):
         self.class_names = [c["name"] for c in self.class_info]
         self.num_images = len(self.image_info)
         self.image_ids = np.arange(self.num_images)
-        print(f"Number of images: {self.num_images}")
-        print(f"Number of classes: {self.num_classes}")
+        logger.info(f"Number of images: {self.num_images}")
+        logger.info(f"Number of classes: {self.num_classes}")
 
     def load_pose_Rt(self, image_id, annotation_id):
         image_id_str = str(image_id)

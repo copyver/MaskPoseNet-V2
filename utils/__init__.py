@@ -3,7 +3,9 @@ from pathlib import Path
 from easydict import EasyDict as edict
 from loguru import logger
 import re
+import platform
 
+MACOS, LINUX, WINDOWS = (platform.system() == x for x in ["Darwin", "Linux", "Windows"])
 
 def colorstr(*input):
     r"""

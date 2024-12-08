@@ -53,7 +53,7 @@ class BuildDataloader:
                     dataset,
                     batch_size=cfg.TEST_DATALOADER.BATCH_SIZE,
                     shuffle=cfg.TEST_DATALOADER.SHUFFLE,
-                    num_workers=cfg.TEST_DATALOADER.NUM_NUM_WORKERS,
+                    num_workers=cfg.TEST_DATALOADER.NUM_WORKERS,
                     worker_init_fn=comm.worker_init_reset_seed,
                     collate_fn=collate_fn,
                     drop_last=cfg.TEST_DATALOADER.DROP_LAST
