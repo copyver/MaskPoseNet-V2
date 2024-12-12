@@ -4,7 +4,7 @@ import os
 import time
 from copy import deepcopy
 from pathlib import Path
-
+import gc
 import numpy as np
 import torch
 import torch.nn as nn
@@ -13,17 +13,14 @@ from torch import distributed as dist
 from torch import optim
 from tqdm import tqdm
 
-from data.dataloader.build_dataloader import BuildDataloader
 from nn.tasks import attempt_load_one_weight
-from utils import colorstr
+from utils import colorstr, RANK, LOCAL_RANK
 from utils import yaml_print, yaml_save, logger_format_function
 from utils.log_utils import TensorBoardWriter
 from utils.torch_utils import (
     select_device,
     init_seeds,
     torch_distributed_zero_first,
-    RANK,
-    LOCAL_RANK,
     one_cycle,
     autocast,
     EarlyStopping,
@@ -41,7 +38,7 @@ class BaseTrainer:
         self.cfg = cfg
         self.callbacks = callbacks
         self.is_train = self.cfg.IS_TRAIN
-        self.device = select_device(device=cfg.SOLVERS.DEVICE, batch=cfg.TRAIN_DATALOADER.BATCH_SIZE)
+        self.device = select_device(device=cfg.SOLVERS.DEVICE, batch=cfg.TRAIN_DATA.BATCH_SIZE)
         self.validator = None
         self.metrics = None
         self.plots = {}
@@ -51,6 +48,7 @@ class BaseTrainer:
         self.logs_name = self.cfg.SOLVERS.LOGS_NAME
         self.tensorboard_logs_dir = self.output_dir / self.cfg.LOGS_NAME / self.cfg.SOLVERS.TENSORBOARD_LOGS_DIR
         self.checkpoint_dir = self.output_dir / self.cfg.LOGS_NAME / self.cfg.SOLVERS.CHECKPOINTS_DIR
+        self.save_dir = self.output_dir / self.cfg.LOGS_NAME / self.cfg.SOLVERS.SAVE_DIR
         logger.add(self.tensorboard_logs_dir / "log.txt", format=logger_format_function)
         if RANK in {-1, 0}:
             self.checkpoint_dir.mkdir(parents=True, exist_ok=True)  # make dir
@@ -60,7 +58,7 @@ class BaseTrainer:
         self.print_freq = self.cfg.SOLVERS.PRINT_FREQ
 
         self.nbs = self.cfg.SOLVERS.NOMINAL_BATCH_SIZE
-        self.batch_size = self.cfg.TRAIN_DATALOADER.BATCH_SIZE
+        self.batch_size = self.cfg.TRAIN_DATA.BATCH_SIZE
         self.epochs = self.cfg.SOLVERS.EPOCHS or 100  # in case users accidentally pass epochs=None with timed training
         self.start_epoch = self.cfg.SOLVERS.START_EPOCH or 0
         if RANK == -1:
@@ -68,8 +66,8 @@ class BaseTrainer:
 
         # Model and Dataset
         self.model = model
-        with torch_distributed_zero_first(LOCAL_RANK):  # avoid auto-downloading dataset multiple times
-            self.trainset, self.testset = self.get_dataset()
+        # with torch_distributed_zero_first(LOCAL_RANK):  # avoid auto-downloading dataset multiple times
+        #     self.trainset, self.testset = self.get_dataset()
         self.ema = None
 
         # Optimization utils init
@@ -100,12 +98,12 @@ class BaseTrainer:
 
         # Run subprocess if DDP training, else train normally
         if world_size > 1 and "LOCAL_RANK" not in os.environ:
-            if self.cfg.TRAIN_DATALOADER.BATCH_SIZE < 1.0:
+            if self.cfg.TRAIN_DATA.BATCH_SIZE < 1.0:
                 logger.warning(
                     "WARNING  'batch<1' for AutoBatch is incompatible with Multi-GPU training, setting "
                     "default 'batch=16'"
                 )
-                self.cfg.TRAIN_DATALOADER.BATCH_SIZE = 16
+                self.cfg.TRAIN_DATA.BATCH_SIZE = 16
 
         # Todo:run ddp training
 
@@ -113,9 +111,9 @@ class BaseTrainer:
             self._do_train(world_size)
 
     def _do_train(self, world_size):
-        self._set_up_train()
+        self._set_up_train(world_size)
 
-        nb = self.per_gpu_iter_num_per_epoch  # number of batches
+        nb = len(self.train_loader)
         nw = max(round(self.cfg.SOLVERS.WARMUP_EPOCHS * nb),
                  100) if self.cfg.SOLVERS.WARMUP_EPOCHS > 0 else -1  # warmup iterations
         last_opt_step = -1
@@ -133,11 +131,12 @@ class BaseTrainer:
             self.scheduler.step()
 
             self.model.train()
-            pbar = enumerate(self.train_dataloader)
+            pbar = enumerate(self.train_loader)
 
             if RANK in {-1, 0}:
                 logger.info(self.progress_string())   # Todo: add function
-                pbar = tqdm(enumerate(self.train_dataloader), total=nb)
+                pbar = tqdm(enumerate(self.train_loader), total=nb)
+
             self.tloss = None
             for i, batch in pbar:
                 self.run_callbacks("on_train_batch_start")
@@ -249,7 +248,7 @@ class BaseTrainer:
             seconds = time.time() - self.train_time_start
             logger.info(f"\n{epoch - self.start_epoch + 1} epochs completed in {seconds / 3600:.3f} hours.")
             self.final_eval()
-            if self.cfg.plots:
+            if self.cfg.PLOTS:
                 self.plot_metrics()
             self.run_callbacks("on_train_end")
         self._clear_memory()
@@ -345,11 +344,6 @@ class BaseTrainer:
         """Allows custom preprocessing model inputs and ground truths depending on task type."""
         return batch
 
-    def _step(self, data):
-        raise NotImplementedError("_step function is not implemented in trainer")
-
-    def _set_up_loss(self):
-        raise NotImplementedError("_set_up_loss function is not implemented in trainer")
 
     def _set_up_train(self, world_size=1):
         """Builds dataloaders and optimizer on correct rank process."""
@@ -405,22 +399,32 @@ class BaseTrainer:
         # Check imgsz  Todo: add img size check
 
         # Dataloaders
-        build_dataloader_train = BuildDataloader(self.cfg, self.trainset, is_train=True)
-        self.train_dataloader = build_dataloader_train.get_dataloader()
-        self.train_data_size = build_dataloader_train.get_dataset_size()
-        self.per_gpu_iter_num_per_epoch = self.train_data_size // self.batch_size
-        logger.info(f"Training with {self.train_data_size} train images.")
-        logger.info(f"Training per_gpu_iter_num_per_epoch {self.per_gpu_iter_num_per_epoch}")
+        batch_size = self.batch_size // max(world_size, 1)
+        self.train_loader = self.get_dataloader(batch_size=batch_size, rank=LOCAL_RANK, is_train=True)
         if RANK in {-1, 0}:
-            build_dataloader_test = BuildDataloader(self.cfg, self.testset, is_train=False)
-            self.test_dataloader = build_dataloader_test.get_dataloader()
-            self.test_data_size = build_dataloader_test.get_dataset_size()
-            self.test_per_gpu_iter_num_per_epoch = self.test_data_size // self.batch_size
-            logger.info(f"Training with {self.test_data_size} test images.")
-            logger.info(f"Training test_per_gpu_iter_num_per_epoch {self.test_per_gpu_iter_num_per_epoch}")
+            # Note: When training DOTA dataset, double batch size could get OOM on images with >2000 objects.
+            self.test_loader = self.get_dataloader(batch_size=batch_size, rank=-1, is_train=False)
+            self.validator = self.get_validator()
+            metric_keys = self.validator.metrics.keys + self.label_loss_items(prefix="val")
+            self.metrics = dict(zip(metric_keys, [0] * len(metric_keys)))
+            # self.ema = ModelEMA(self.model)
 
-        self.total_steps = (self.start_epoch - 1) * self.per_gpu_iter_num_per_epoch
-        self.train_data_iter = iter(self.train_dataloader)
+        # build_dataloader_train = BuildDataloader(self.cfg, self.trainset, is_train=True)
+        # self.train_dataloader = build_dataloader_train.get_dataloader()
+        # self.train_data_size = build_dataloader_train.get_dataset_size()
+        # self.per_gpu_iter_num_per_epoch = self.train_data_size // self.batch_size
+        # logger.info(f"Training with {self.train_data_size} train images.")
+        # logger.info(f"Training per_gpu_iter_num_per_epoch {self.per_gpu_iter_num_per_epoch}")
+        # if RANK in {-1, 0}:
+        #     build_dataloader_test = BuildDataloader(self.cfg, self.testset, is_train=False)
+        #     self.test_dataloader = build_dataloader_test.get_dataloader()
+        #     self.test_data_size = build_dataloader_test.get_dataset_size()
+        #     self.test_per_gpu_iter_num_per_epoch = self.test_data_size // self.batch_size
+        #     logger.info(f"Training with {self.test_data_size} test images.")
+        #     logger.info(f"Training test_per_gpu_iter_num_per_epoch {self.test_per_gpu_iter_num_per_epoch}")
+        #
+        # self.total_steps = (self.start_epoch - 1) * self.per_gpu_iter_num_per_epoch
+        # self.train_data_iter = iter(self.train_dataloader)
 
         if RANK in {-1, 0} and self.is_train:
             time_log = "{0:%Y-%m-%d-%H-%M-%S-tensorboard/}".format(datetime.datetime.now())
@@ -430,7 +434,7 @@ class BaseTrainer:
         # Optimizer
         self.accumulate = max(round(self.nbs / self.batch_size), 1)  # accumulate loss before optimizing
         weight_decay = self.cfg.OPTIMIZER.WEIGHT_DECAY * self.batch_size * self.accumulate / self.nbs  # scale weight_decay
-        iterations = math.ceil(self.train_data_size / max(self.batch_size, self.nbs)) * self.epochs
+        iterations = math.ceil(len(self.train_loader.dataset) / max(self.batch_size, self.nbs)) * self.epochs
         self.optimizer = self.build_optimizer(
             model=self.model,
             name=self.cfg.OPTIMIZER.TYPE,
@@ -457,9 +461,9 @@ class BaseTrainer:
         if str(self.model).endswith(".pt"):
             weights, ckpt = attempt_load_one_weight(self.model)
             cfg = weights.yaml
-        elif isinstance(self.args.pretrained, (str, Path)):
-            weights, _ = attempt_load_one_weight(self.args.pretrained)
-        self.model = self.get_model(cfg=cfg, weights=weights, verbose=RANK == -1)  # calls Model(cfg, weights)
+        elif isinstance(self.cfg.SOLVERS.PRETRAINED, (str, Path)):
+            weights, _ = attempt_load_one_weight(self.cfg.PRETRAINED)
+        # self.model = self.get_model(cfg=cfg, weights=weights, verbose=RANK == -1)  # calls Model(cfg, weights)
         return ckpt
 
     def build_optimizer(self, model, name="auto", lr=0.001, momentum=0.9, decay=1e-5, iterations=1e5):
@@ -485,13 +489,13 @@ class BaseTrainer:
         if name == "auto":
             logger.info(
                 f"{colorstr('optimizer:')} 'optimizer=auto' found, "
-                f"ignoring 'lr0={self.args.lr0}' and 'momentum={self.args.momentum}' and "
+                f"ignoring 'lr0={lr}' and 'momentum={momentum}' and "
                 f"determining best 'optimizer', 'lr0' and 'momentum' automatically... "
             )
             nc = getattr(model, "nc", 10)  # number of classes
             lr_fit = round(0.002 * 5 / (4 + nc), 6)  # lr0 fit equation to 6 decimal places
             name, lr, momentum = ("SGD", 0.01, 0.9) if iterations > 10000 else ("AdamW", lr_fit, 0.9)
-            self.args.warmup_bias_lr = 0.0  # no higher than 0.01 for Adam
+            self.cfg.OPTIMIZER.WARMUP_BIAS_LR = 0.0  # no higher than 0.01 for Adam
 
         for module_name, module in model.named_modules():
             for param_name, param in module.named_parameters(recurse=False):
@@ -560,10 +564,39 @@ class BaseTrainer:
             self.lf = lambda x: max(1 - x / self.epochs, 0) * (1.0 - self.cfg.LR_SCHEDULER.LRF) + self.cfg.LR_SCHEDULER.LRF  # linear
         self.scheduler = optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=self.lf)
 
-    def get_dataset(self):
-        """
-        Get train, val path from data dict if it exists.
+    def get_dataloader(self, batch_size=16, rank=0, is_train=True):
+        """Returns dataloader derived from torch.data.Dataloader."""
+        raise NotImplementedError("get_dataloader function not implemented in trainer")
 
-        Returns None if data format is not recognized.
+    def _step(self, data):
+        raise NotImplementedError("_step function is not implemented in trainer")
+
+    def _set_up_loss(self):
+        raise NotImplementedError("_set_up_loss function is not implemented in trainer")
+
+    def get_validator(self):
+        """Returns a NotImplementedError when the get_validator function is called."""
+        raise NotImplementedError("get_validator function not implemented in trainer")
+
+    def validate(self):
         """
-        raise NotImplementedError("get_dataset function is not implemented in trainer")
+        Runs validation on test set using self.validator.
+
+        The returned dict is expected to contain "fitness" key.
+        """
+        metrics = self.validator(self)
+        fitness = metrics.pop("fitness", -self.loss.detach().cpu().numpy())  # use loss as fitness measure if not found
+        if not self.best_fitness or self.best_fitness < fitness:
+            self.best_fitness = fitness
+        return metrics, fitness
+
+    def _clear_memory(self):
+        """Clear accelerator memory on different platforms."""
+        gc.collect()
+        if self.device.type == "mps":
+            torch.mps.empty_cache()
+        elif self.device.type == "cpu":
+            return
+        else:
+            torch.cuda.empty_cache()
+

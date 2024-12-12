@@ -3,16 +3,17 @@ import torch
 from data.dataset.posenet_dataset import PoseNetDataset
 from engine import BaseTrainer
 from models.pose.loss_utils import Loss
+from utils.torch_utils import torch_distributed_zero_first
+from data.dataloader.build import build_dataloader
+from copy import copy
 
 
 class PoseTrainer(BaseTrainer):
     def __init__(self, cfg, model, callbacks=None):
         super(PoseTrainer, self).__init__(cfg, model, callbacks=callbacks)
 
-    def get_dataset(self):
-        train_dataset = PoseNetDataset(self.cfg.TRAIN_DATASET, is_train=True)
-        val_dataset = PoseNetDataset(self.cfg.TEST_DATASET, is_train=False)
-        return train_dataset, val_dataset
+    def build_dataset(self, cfg, is_train=True):
+        return PoseNetDataset(cfg, is_train)
 
     def _set_up_loss(self):
         self.loss_names = "coarse0", "coarse1", "coarse2", "fine0", "fine1", "fine2"
@@ -56,3 +57,22 @@ class PoseTrainer(BaseTrainer):
             return dict(zip(keys, loss_items))
         else:
             return keys
+
+    def get_dataloader(self, batch_size=16, rank=0, is_train=True):
+        """Construct and return dataloader."""
+        with torch_distributed_zero_first(rank):  # init dataset *.cache only once if DDP
+            if is_train:
+                dataset = self.build_dataset(self.cfg.TRAIN_DATA, is_train)
+            else:
+                dataset = self.build_dataset(self.cfg.TEST_DATA, is_train)
+        shuffle = is_train
+        workers = self.cfg.TRAIN_DATA.WORKERS if is_train else self.cfg.TEST_DATA.WORKERS
+        return build_dataloader(dataset, batch_size, workers, shuffle, rank)  # return dataloader
+
+    def get_validator(self):
+        """Returns a DetectionValidator for YOLO model validation."""
+        from engine.pose.posevalidator import PoseValidator
+        self.loss_names = "box_loss", "cls_loss", "dfl_loss"
+        return PoseValidator(
+            self.test_loader, save_dir=self.save_dir, cfg=copy(self.cfg), _callbacks=self.callbacks
+        )

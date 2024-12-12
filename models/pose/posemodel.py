@@ -55,20 +55,19 @@ class PoseModel(nn.Module):
 if __name__ == '__main__':
     from easydict import EasyDict as edict
     import yaml
-    from data.dataloader.build_dataloader import BuildDataloader
+    from data.dataloader.build import build_dataloader
     from data.dataset.posenet_dataset import PoseNetDataset
 
-    with open('../../cfg/base.yaml', 'r') as f:
+    with open('cfg/base.yaml', 'r') as f:
         cfg_dict = yaml.safe_load(f)
     cfg = edict(cfg_dict)
 
     # 创建PoseNetDataset实例
-    train_dataset = PoseNetDataset(cfg.TRAIN_DATASET, is_train=True)
+    train_dataset = PoseNetDataset(cfg.TRAIN_DATA, is_train=True)
     print(f"数据集加载完成，共有 {len(train_dataset)} 张训练图片")
 
-    # 使用DataLoader测试批量加载
-    build_dataloader_train = BuildDataloader(cfg, train_dataset, is_train=True, collate_fn=None)
-    train_dataloader = build_dataloader_train.get_dataloader()
+    train_dataloader = build_dataloader(train_dataset, batch=cfg.TRAIN_DATA.BATCH_SIZE,
+                                        workers=cfg.TRAIN_DATA.WORKERS, shuffle=True)
 
     model = PoseModel(cfg.POSE_MODEL)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')

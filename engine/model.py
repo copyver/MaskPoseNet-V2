@@ -7,12 +7,9 @@ import torch.nn as nn
 from engine import PoseTrainer, PosePredictor, PoseValidator, SegTrainer, SegPredictor, SegValidator
 from models import PoseModel, SegModel
 from nn.tasks import attempt_load_one_weight
-from utils import yaml_model_load
+from utils import yaml_model_load, RANK
 from utils.callback import DefaultCallbacks
-from utils.torch_utils import (
-    RANK,
-    print_model_summary
-)
+from utils.torch_utils import print_model_summary
 
 
 class Model(nn.Module):

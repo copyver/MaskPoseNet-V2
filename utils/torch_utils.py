@@ -6,14 +6,14 @@ from contextlib import contextmanager
 import numpy as np
 import torch
 import torch.distributed as dist
+import torch.nn as nn
 from loguru import logger
 
+from utils import NUM_THREADS
 from utils.checks import check_version
 
-NUM_THREADS = min(8, max(1, os.cpu_count() - 1))
-RANK = int(os.getenv("RANK", -1))
-LOCAL_RANK = int(os.getenv("LOCAL_RANK", -1))
 TORCH_2_4 = check_version(torch.__version__, "2.4.0")
+TORCH_1_9 = check_version(torch.__version__, "1.9.0")
 
 
 def convert_optimizer_state_dict_to_fp16(state_dict):
@@ -242,3 +242,26 @@ def print_model_summary(model, verbose=False):
         total_params += param.numel()
 
     logger.info(f"Total number of parameters: {total_params}")
+
+
+def is_parallel(model):
+    """Returns True if model is of type DP or DDP."""
+    return isinstance(model, (nn.parallel.DataParallel, nn.parallel.DistributedDataParallel))
+
+
+def de_parallel(model):
+    """De-parallelize a model: returns single-GPU model if model is of type DP or DDP."""
+    return model.module if is_parallel(model) else model
+
+
+def smart_inference_mode():
+    """Applies torch.inference_mode() decorator if torch>=1.9.0 else torch.no_grad() decorator."""
+
+    def decorate(fn):
+        """Applies appropriate torch decorator for inference mode based on torch version."""
+        if TORCH_1_9 and torch.is_inference_mode_enabled():
+            return fn  # already in inference_mode, act as a pass-through
+        else:
+            return (torch.inference_mode if TORCH_1_9 else torch.no_grad)()(fn)
+
+    return decorate

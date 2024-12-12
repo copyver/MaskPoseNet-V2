@@ -4,8 +4,14 @@ from easydict import EasyDict as edict
 from loguru import logger
 import re
 import platform
+import os
 
 MACOS, LINUX, WINDOWS = (platform.system() == x for x in ["Darwin", "Linux", "Windows"])
+PIN_MEMORY = str(os.getenv("PIN_MEMORY", True)).lower() == "true"
+NUM_THREADS = min(8, max(1, os.cpu_count() - 1))
+RANK = int(os.getenv("RANK", -1))
+LOCAL_RANK = int(os.getenv("LOCAL_RANK", -1))
+
 
 def colorstr(*input):
     r"""
@@ -112,6 +118,7 @@ def yaml_load(file="base.yaml"):
         data = yaml.safe_load(s) or {}  # always return a dict (yaml.safe_load() may return None for empty files)
         return edict(data)
 
+
 def serialize_data(data):
     """
     Recursively convert unsupported data types into serializable formats.
@@ -190,6 +197,27 @@ def yaml_print(configs):
 
     logger.info(colorstr("white", "bold", "YAML Configuration:"))
     _print_dict(configs)
+
+
+def export_formats():
+    """Ultralytics YOLO export formats."""
+    x = [
+        ["PyTorch", "-", ".pt", True, True],
+        ["TorchScript", "torchscript", ".torchscript", True, True],
+        ["ONNX", "onnx", ".onnx", True, True],
+        ["OpenVINO", "openvino", "_openvino_model", True, False],
+        ["TensorRT", "engine", ".engine", False, True],
+        ["CoreML", "coreml", ".mlpackage", True, False],
+        ["TensorFlow SavedModel", "saved_model", "_saved_model", True, True],
+        ["TensorFlow GraphDef", "pb", ".pb", True, True],
+        ["TensorFlow Lite", "tflite", ".tflite", True, False],
+        ["TensorFlow Edge TPU", "edgetpu", "_edgetpu.tflite", True, False],
+        ["TensorFlow.js", "tfjs", "_web_model", True, False],
+        ["PaddlePaddle", "paddle", "_paddle_model", True, True],
+        ["MNN", "mnn", ".mnn", True, True],
+        ["NCNN", "ncnn", "_ncnn_model", True, True],
+    ]
+    return dict(zip(["Format", "Argument", "Suffix", "CPU", "GPU"], zip(*x)))
 
 
 if __name__ == "__main__":

@@ -282,7 +282,7 @@ if __name__ == "__main__":
     import random
     from easydict import EasyDict as edict
     import yaml
-    from data.dataloader.build_dataloader import BuildDataloader
+    from data.dataloader.build import build_dataloader
 
     with open('../../cfg/base.yaml', 'r') as f:
         cfg_dict = yaml.safe_load(f)
@@ -294,7 +294,7 @@ if __name__ == "__main__":
         print("开始测试PoseNetDataset加载...")
 
         # 创建PoseNetDataset实例
-        train_dataset = PoseNetDataset(cfg.TRAIN_DATASET, is_train=True)
+        train_dataset = PoseNetDataset(cfg.TRAIN_DATA, is_train=True)
         print(f"数据集加载完成，共有 {len(train_dataset)} 张训练图片")
 
         # 加载数据
@@ -313,13 +313,13 @@ if __name__ == "__main__":
             print(f" - rotation_label: {train_data['rotation_label'].shape}")
 
         # 使用DataLoader测试批量加载
-        build_dataloader_train = BuildDataloader(cfg, train_dataset, is_train=True, collate_fn=None)
+        train_dataloader = build_dataloader(train_dataset, batch=cfg.TRAIN_DATA.BATCH_SIZE,
+                                                  workers=cfg.TRAIN_DATA.WORKERS, shuffle=True)
         # collate_fn=None
         # {
         #     'rgb': [Tensor1, Tensor2, Tensor3, ...],  # 每个样本的 'rgb'
         #     'pts': [Tensor4, Tensor5, Tensor6, ...]  # 每个样本的 'pts'
         # }
-        train_dataloader = build_dataloader_train.get_dataloader()
 
         print("测试批量加载...")
         for batch_index, batch_data in enumerate(train_dataloader):
