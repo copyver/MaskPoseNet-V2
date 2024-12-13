@@ -1,18 +1,19 @@
-from utils.torch_utils import smart_inference_mode
+import json
+import time
+from pathlib import Path
+
 import torch
 from loguru import logger
+from tqdm import tqdm
+
+from nn.autobackend import AutoBackend
+from utils import colorstr
+from utils.ops import Profile
 from utils.torch_utils import (
     select_device,
     de_parallel,
 )
-from nn.autobackend import AutoBackend
-from utils.ops import Profile
-from tqdm import tqdm
-import numpy as np
-import json
-from utils import colorstr
-from pathlib import Path
-import time
+from utils.torch_utils import smart_inference_mode
 
 
 class BaseValidator(object):
@@ -33,16 +34,9 @@ class BaseValidator(object):
         self.cfg = cfg
         self.dataloader = dataloader
         self.pbar = pbar
-        self.data = None
         self.device = None
-        self.batch_i = None
         self.training = True
         self.names = None
-        self.seen = None
-        self.stats = None
-        self.confusion_matrix = None
-        self.nc = None
-        self.jdict = None
         self.speed = {"preprocess": 0.0, "inference": 0.0, "loss": 0.0, "postprocess": 0.0}
 
         self.save_dir = save_dir
@@ -57,14 +51,13 @@ class BaseValidator(object):
         self.training = trainer is not None
         if self.training:
             self.device = trainer.device
-            self.data = trainer.data
             # force FP16 val during training
             self.cfg.HALF = self.device.type != "cpu" and trainer.amp
             model = trainer.model
             model = model.half() if self.cfg.HALF else model.float()
             # self.model = model
             self.loss = torch.zeros_like(trainer.loss_items, device=trainer.device)
-            self.cfg.PLOTS &= trainer.stopper.possible_stop or (trainer.epoch == trainer.epochs - 1)
+            self.cfg.SOLVERS.PLOTS &= trainer.stopper.possible_stop or (trainer.epoch == trainer.epochs - 1)
             model.eval()
         else:
             if str(self.model).endswith(".yaml"):
@@ -89,14 +82,9 @@ class BaseValidator(object):
                 'pts': (b, self.cfg.TEST_DATA.N_SAMPLE_OBSERVED_POINT, 3),
                 'rgb': (b, 3, self.cfg.TEST_DATA.IMG_SIZE, self.cfg.TEST_DATA.IMG_SIZE),
                 'rgb_choose': (b, self.cfg.TEST_DATA.N_SAMPLE_OBSERVED_POINT),
-                'translation_label': (1, 3),
-                'rotation_label': (1, 3, 3),
-                'tem1_rgb': (b, 3, self.cfg.TEST_DATA.IMG_SIZE, self.cfg.TEST_DATA.IMG_SIZE),
-                'tem1_choose': (b, self.cfg.TEST_DATA.N_SAMPLE_TEMPLATE_POINT),
-                'tem1_pts': (b, self.cfg.TEST_DATA.N_SAMPLE_TEMPLATE_POINT, 3),
-                'tem2_rgb': (b, 3, self.cfg.TEST_DATA.IMG_SIZE, self.cfg.TEST_DATA.IMG_SIZE),
-                'tem2_choose': (b, self.cfg.TEST_DATA.N_SAMPLE_TEMPLATE_POINT),
-                'tem2_pts': (b, self.cfg.TEST_DATA.N_SAMPLE_TEMPLATE_POINT, 3),
+                'model': (b, self.cfg.TEST_DATA.N_SAMPLE_MODEL_POINT, 3),
+                'dense_po': (b, self.cfg.POSE_MODEL.FINE_NPOINT, 3),
+                'dense_fo': (b, self.cfg.POSE_MODEL.FINE_NPOINT, self.cfg.POSE_MODEL.FEATURE_EXTRACTION.OUT_DIM),
             }
 
             model.warmup(input_shapes=input_shapes)  # warmup
@@ -113,14 +101,13 @@ class BaseValidator(object):
         self.jdict = []  # empty before each val
         for batch_i, batch in enumerate(bar):
             self.run_callbacks("on_val_batch_start")
-            self.batch_i = batch_i
             # Preprocess
             with dt[0]:
                 batch = self.preprocess(batch)
 
             # Inference
             with dt[1]:
-                preds = model(batch)
+                preds = self.process(model, batch)
 
             # Loss
             with dt[2]:
@@ -135,7 +122,6 @@ class BaseValidator(object):
 
             self.run_callbacks("on_val_batch_end")
         stats = self.get_stats()
-        self.check_stats(stats)
         self.speed = dict(zip(self.speed.keys(), (x.t / len(self.dataloader.dataset) * 1e3 for x in dt)))
         self.finalize_metrics()
         self.print_results()
@@ -155,7 +141,7 @@ class BaseValidator(object):
                     logger.info(f"Saving {f.name}...")
                     json.dump(self.jdict, f)  # flatten and save
                 stats = self.eval_json(stats)  # update stats
-            if self.cfg.PLOTS or self.cfg.SAVE_JSON:
+            if self.SOLVERS.PLOTS or self.cfg.SOLVERS.SAVE_JSON:
                 logger.info(f"Results saved to {colorstr('bold', self.save_dir)}")
             return stats
 
@@ -178,7 +164,11 @@ class BaseValidator(object):
 
     def preprocess(self, batch):
         """Preprocesses an input batch."""
-        return batch
+        raise NotImplementedError("preprocess function not implemented in validator")
+
+    def process(self, model, batch):
+        raise NotImplementedError("process function not implemented in validator")
+
 
     def postprocess(self, preds):
         """Preprocesses the predictions."""

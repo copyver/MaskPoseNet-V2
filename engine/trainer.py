@@ -197,7 +197,7 @@ class BaseTrainer:
                         )
                     )
                     self.run_callbacks("on_batch_end")
-                    # if self.cfg.plots and ni in self.plot_idx:   # Todo: add plots
+                    # if self.cfg.SOLVERS.PLOTS and ni in self.plot_idx:   # Todo: add plots
                     #     self.plot_training_samples(batch, ni)
 
                 self.run_callbacks("on_train_batch_end")
@@ -213,11 +213,11 @@ class BaseTrainer:
                     self.metrics, self.fitness = self.validate()
                 self.save_metrics(metrics={**self.label_loss_items(self.tloss), **self.metrics, **self.lr})
                 self.stop |= self.stopper(epoch + 1, self.fitness) or final_epoch
-                if self.cfg.time:
-                    self.stop |= (time.time() - self.train_time_start) > (self.cfg.time * 3600)
+                if self.cfg.SOLVERS.TIME:
+                    self.stop |= (time.time() - self.train_time_start) > (self.cfg.SOLVERS.TIME * 3600)
 
                 # Save model
-                if self.cfg.save or final_epoch:
+                if self.cfg.SOLVERS.SAVE or final_epoch:
                     self.save_model()
                     self.run_callbacks("on_model_save")
 
@@ -225,9 +225,9 @@ class BaseTrainer:
             t = time.time()
             self.epoch_time = t - self.epoch_time_start
             self.epoch_time_start = t
-            if self.cfg.time:
+            if self.cfg.SOLVERS.TIME:
                 mean_epoch_time = (t - self.train_time_start) / (epoch - self.start_epoch + 1)
-                self.epochs = self.cfg.epochs = math.ceil(self.cfg.time * 3600 / mean_epoch_time)
+                self.epochs = self.cfg.epochs = math.ceil(self.cfg.SOLVERS.TIME * 3600 / mean_epoch_time)
                 self._setup_scheduler()
                 self.scheduler.last_epoch = self.epoch  # do not move
                 self.stop |= epoch >= self.epochs  # stop if exceeded epochs
@@ -248,7 +248,7 @@ class BaseTrainer:
             seconds = time.time() - self.train_time_start
             logger.info(f"\n{epoch - self.start_epoch + 1} epochs completed in {seconds / 3600:.3f} hours.")
             self.final_eval()
-            if self.cfg.PLOTS:
+            if self.cfg.SOLVERS.PLOTS:
                 self.plot_metrics()
             self.run_callbacks("on_train_end")
         self._clear_memory()
@@ -344,7 +344,6 @@ class BaseTrainer:
         """Allows custom preprocessing model inputs and ground truths depending on task type."""
         return batch
 
-
     def _set_up_train(self, world_size=1):
         """Builds dataloaders and optimizer on correct rank process."""
         # Model
@@ -402,29 +401,11 @@ class BaseTrainer:
         batch_size = self.batch_size // max(world_size, 1)
         self.train_loader = self.get_dataloader(batch_size=batch_size, rank=LOCAL_RANK, is_train=True)
         if RANK in {-1, 0}:
-            # Note: When training DOTA dataset, double batch size could get OOM on images with >2000 objects.
             self.test_loader = self.get_dataloader(batch_size=batch_size, rank=-1, is_train=False)
             self.validator = self.get_validator()
             metric_keys = self.validator.metrics.keys + self.label_loss_items(prefix="val")
             self.metrics = dict(zip(metric_keys, [0] * len(metric_keys)))
             # self.ema = ModelEMA(self.model)
-
-        # build_dataloader_train = BuildDataloader(self.cfg, self.trainset, is_train=True)
-        # self.train_dataloader = build_dataloader_train.get_dataloader()
-        # self.train_data_size = build_dataloader_train.get_dataset_size()
-        # self.per_gpu_iter_num_per_epoch = self.train_data_size // self.batch_size
-        # logger.info(f"Training with {self.train_data_size} train images.")
-        # logger.info(f"Training per_gpu_iter_num_per_epoch {self.per_gpu_iter_num_per_epoch}")
-        # if RANK in {-1, 0}:
-        #     build_dataloader_test = BuildDataloader(self.cfg, self.testset, is_train=False)
-        #     self.test_dataloader = build_dataloader_test.get_dataloader()
-        #     self.test_data_size = build_dataloader_test.get_dataset_size()
-        #     self.test_per_gpu_iter_num_per_epoch = self.test_data_size // self.batch_size
-        #     logger.info(f"Training with {self.test_data_size} test images.")
-        #     logger.info(f"Training test_per_gpu_iter_num_per_epoch {self.test_per_gpu_iter_num_per_epoch}")
-        #
-        # self.total_steps = (self.start_epoch - 1) * self.per_gpu_iter_num_per_epoch
-        # self.train_data_iter = iter(self.train_dataloader)
 
         if RANK in {-1, 0} and self.is_train:
             time_log = "{0:%Y-%m-%d-%H-%M-%S-tensorboard/}".format(datetime.datetime.now())

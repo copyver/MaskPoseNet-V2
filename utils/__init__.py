@@ -220,6 +220,60 @@ def export_formats():
     return dict(zip(["Format", "Argument", "Suffix", "CPU", "GPU"], zip(*x)))
 
 
+class SimpleClass:
+    """
+    A simple base class for creating objects with string representations of their attributes.
+
+    This class provides a foundation for creating objects that can be easily printed or represented as strings,
+    showing all their non-callable attributes. It's useful for debugging and introspection of object states.
+
+    Methods:
+        __str__: Returns a human-readable string representation of the object.
+        __repr__: Returns a machine-readable string representation of the object.
+        __getattr__: Provides a custom attribute access error message with helpful information.
+
+    Examples:
+        >>> class MyClass(SimpleClass):
+        ...     def __init__(self):
+        ...         self.x = 10
+        ...         self.y = "hello"
+        >>> obj = MyClass()
+        >>> print(obj)
+        __main__.MyClass object with attributes:
+
+        x: 10
+        y: 'hello'
+
+    Notes:
+        - This class is designed to be subclassed. It provides a convenient way to inspect object attributes.
+        - The string representation includes the module and class name of the object.
+        - Callable attributes and attributes starting with an underscore are excluded from the string representation.
+    """
+
+    def __str__(self):
+        """Return a human-readable string representation of the object."""
+        attr = []
+        for a in dir(self):
+            v = getattr(self, a)
+            if not callable(v) and not a.startswith("_"):
+                if isinstance(v, SimpleClass):
+                    # Display only the module and class name for subclasses
+                    s = f"{a}: {v.__module__}.{v.__class__.__name__} object"
+                else:
+                    s = f"{a}: {repr(v)}"
+                attr.append(s)
+        return f"{self.__module__}.{self.__class__.__name__} object with attributes:\n\n" + "\n".join(attr)
+
+    def __repr__(self):
+        """Return a machine-readable string representation of the object."""
+        return self.__str__()
+
+    def __getattr__(self, attr):
+        """Custom attribute access error message with helpful information."""
+        name = self.__class__.__name__
+        raise AttributeError(f"'{name}' object has no attribute '{attr}'. See valid attributes below.\n{self.__doc__}")
+
+
 if __name__ == "__main__":
     path = "../cfg/base.yaml"
     d = yaml_model_load(path)

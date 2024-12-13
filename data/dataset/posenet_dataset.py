@@ -7,7 +7,7 @@ import torch
 import torchvision.transforms as transforms
 from albumentations.core.transforms_interface import ImageOnlyTransform
 from loguru import logger
-
+import trimesh
 from data.dataset.base_dataset import DatasetBase
 from data.dataset.data_utils import (
     convert_blender_to_pyrender,
@@ -43,7 +43,6 @@ class PoseNetDataset(DatasetBase):
 
     def __init__(self, cfg, is_train=True):
         super().__init__(cfg, is_train)
-        self.cfg = cfg
         self.data_dir = cfg.DATA_DIR
         # self.num_img_per_epoch = cfg.NUM_IMG_PER_EPOCH
         # self.min_visib_px = cfg.MIN_PX_COUNT_VISIB
@@ -52,34 +51,36 @@ class PoseNetDataset(DatasetBase):
         self.rgb_mask_flag = cfg.RGB_MASK_FLAG
         self.img_size = cfg.IMG_SIZE
         self.n_sample_observed_point = cfg.N_SAMPLE_OBSERVED_POINT
-        self.n_sample_model_point = cfg.N_SAMPLE_MODEL_POINT
         self.n_sample_template_point = cfg.N_SAMPLE_TEMPLATE_POINT
-        if self.is_train:
-            self.shift_range = cfg.SHIFT_RANGE
-            self.dilate_mask = cfg.DILATE_MASK
-
         self.dataset_dir = os.path.join(self.data_dir, cfg.DATASET_DIR)
-        self.model_dir = os.path.join(self.data_dir, cfg.MODEL_DIR)
         self.templates_dir = os.path.join(self.data_dir, cfg.TEMPLATE_DIR)
-
-        self.color_augmentor = A.Compose([
-            A.OneOf([
-                A.CoarseDropout(max_holes=5, max_height=20, max_width=20, p=0.5),  # 替代 CoarseDropout
-                A.GaussianBlur(blur_limit=(3, 7), p=0.4),  # 替代 GaussianBlur
-            ], p=0.5),
-            A.OneOf([
-                A.Sharpen(alpha=(0.0, 1.0), lightness=(0.5, 2.0), p=0.3),  # 替代 EnhanceSharpness
-                A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.5, p=0.5),  # 替代 Brightness/Contrast
-                A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.3),  # 替代 EnhanceColor
-            ], p=0.8),
-            A.InvertImg(p=0.3),  # 替代 Invert
-        ], p=1.0)
         self.transform = transforms.Compose([transforms.ToTensor(),
                                              transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                                                   std=[0.229, 0.224, 0.225])])
-        if self.is_train:
+
+        if is_train:
+            self.dilate_mask = cfg.DILATE_MASK
+            self.shift_range = cfg.SHIFT_RANGE
+            self.color_augmentor = A.Compose([
+                A.OneOf([
+                    A.CoarseDropout(max_holes=5, max_height=20, max_width=20, p=0.5),  # 替代 CoarseDropout
+                    A.GaussianBlur(blur_limit=(3, 7), p=0.4),  # 替代 GaussianBlur
+                ], p=0.5),
+                A.OneOf([
+                    A.Sharpen(alpha=(0.0, 1.0), lightness=(0.5, 2.0), p=0.3),  # 替代 EnhanceSharpness
+                    A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.5, p=0.5),
+                    # 替代 Brightness/Contrast
+                    A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.3),  # 替代 EnhanceColor
+                ], p=0.8),
+                A.InvertImg(p=0.3),  # 替代 Invert
+            ], p=1.0)
             self.load_data("train")
+
         else:
+            self.n_sample_model_point = cfg.N_SAMPLE_MODEL_POINT
+            self.model_dir = os.path.join(self.data_dir, cfg.MODEL_DIR)
+            self.n_template_view = cfg.N_TEMPLATE_VIEW
+            self.color_augmentor = None
             self.load_data("val")
 
     def load_data(self, subset: str = "train"):
@@ -131,7 +132,26 @@ class PoseNetDataset(DatasetBase):
             return self.scene_camera_info[image_id_str]['cam_K']
         return None
 
-    def get_template(self, file_base, category_id, tem_index=1):
+    def get_all_templates(self, category_id):
+        n_template_view = self.n_template_view
+        all_tem_rgb = [[] for i in range(n_template_view)]
+        all_tem_choose = [[] for i in range(n_template_view)]
+        all_tem_pts = [[] for i in range(n_template_view)]
+
+        for i in range(n_template_view):
+            tem_rgb, tem_choose, tem_pts = self.get_template(self.templates_dir, category_id, i)
+            all_tem_rgb[i].append(tem_rgb)
+            all_tem_choose[i].append(tem_choose)
+            all_tem_pts[i].append(tem_pts)
+
+        for i in range(n_template_view):
+            all_tem_rgb[i] = np.stack(all_tem_rgb[i])
+            all_tem_choose[i] = np.stack(all_tem_choose[i])
+            all_tem_pts[i] = np.stack(all_tem_pts[i])
+
+        return all_tem_rgb, all_tem_pts, all_tem_choose
+
+    def get_template(self, file_base, category_id, tem_index=0):
         category_id_str = f"obj_{int(category_id):02d}"
         rgb_path = os.path.join(file_base, category_id_str, f'rgb_{tem_index}.png')
         xyz_path = os.path.join(file_base, category_id_str, f'xyz_{tem_index}.npy')
@@ -166,6 +186,13 @@ class PoseNetDataset(DatasetBase):
         choose = get_resize_rgb_choose(choose, [y1, y2, x1, x2], self.img_size)
 
         return rgb, choose, xyz
+
+    def get_models(self, file_base, category_id):
+        category_id_str = f"obj_{int(category_id):02d}.obj"
+        mesh_path = os.path.join(file_base, category_id_str)
+        mesh = trimesh.load(mesh_path, force='mesh')
+        model_pts, _ = trimesh.sample.sample_surface(mesh, self.n_sample_model_point)
+        return model_pts.astype(np.float32)
 
     def get_train_data(self, index):
         # 获取当前训练图片ID及其所有标注
@@ -237,7 +264,8 @@ class PoseNetDataset(DatasetBase):
         # rgb
         image_path = self.image_info[image_id]['path']
         rgb = load_color_image(image_path)
-        rgb = rgb[..., ::-1][y1:y2, x1:x2, :]
+        rgb = cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB)
+        rgb = rgb[y1:y2, x1:x2, :]
         if np.random.rand() < 0.8 and self.color_augmentor is not None:
             rgb = self.color_augmentor(image=rgb)["image"]
         if self.rgb_mask_flag:
@@ -275,7 +303,80 @@ class PoseNetDataset(DatasetBase):
         return input_dict
 
     def get_test_data(self, index):
-        return self.get_train_data(index)
+        # 获取当前训练图片ID及其所有标注
+        image_id = self.image_ids[index]
+        annotations = self.load_image_annotations(image_id)
+        if len(annotations) == 0:
+            return None
+
+        # 随机选择一个有效标注
+        valid_annotation = np.random.choice(annotations)
+        category_id = valid_annotation['category_id']
+        annotation_id = valid_annotation['id']
+
+        # 加载位姿信息（旋转矩阵R和平移向量t)
+        target_R, target_t = self.load_pose_Rt(image_id, annotation_id)
+        target_R = np.array(target_R).reshape(3, 3).astype(np.float32)
+        target_t = np.array(target_t).reshape(3).astype(np.float32)
+
+        # 加载相机内参矩阵
+        camera_k = self.load_camera_k(image_id)
+        if camera_k is None:
+            return None
+        camera_k = np.array(camera_k).reshape(3, 3).astype(np.float32)
+
+        # 加载模型点云数据
+        model_points = self.get_models(self.model_dir, category_id)
+        if model_points is None:
+            return None
+
+        all_tem, all_tem_pts, all_tem_choose = self.get_all_templates(category_id)
+
+        # 加载目标物体mask
+        mask = load_mask(valid_annotation, self.image_info[image_id]['height'], self.image_info[image_id]['width'])
+        if mask is None or np.sum(mask) == 0:
+            return None
+        mask = (mask * 255).astype(np.uint8)
+        bbox = get_bbox(mask > 0)
+        y1, y2, x1, x2 = bbox
+        mask = mask[y1:y2, x1:x2]
+        choose = mask.astype(np.float32).flatten().nonzero()[0]
+
+        # 加载深度图数据
+        depth_path = self.image_info[image_id]['depth_path']
+        depth = load_depth_image(depth_path)
+        depth = depth * self.depth_scale / 1000.0
+        pts = get_point_cloud_from_depth(depth, camera_k, [y1, y2, x1, x2])
+        pts = pts.reshape(-1, 3)[choose, :]
+
+        if len(choose) <= self.n_sample_observed_point:
+            choose_idx = np.random.choice(np.arange(len(choose)), self.n_sample_observed_point)
+        else:
+            choose_idx = np.random.choice(np.arange(len(choose)), self.n_sample_observed_point, replace=False)
+        choose = choose[choose_idx]
+        pts = pts[choose_idx]
+
+        # rgb
+        image_path = self.image_info[image_id]['path']
+        rgb = load_color_image(image_path)
+        rgb = cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB)
+        rgb = rgb[y1:y2, x1:x2, :]
+        if self.rgb_mask_flag:
+            rgb = rgb * (mask[:, :, None] > 0).astype(np.uint8)
+        rgb = cv2.resize(rgb, (self.img_size, self.img_size), interpolation=cv2.INTER_LINEAR)
+        rgb = self.transform(rgb)
+        rgb_choose = get_resize_rgb_choose(choose, [y1, y2, x1, x2], self.img_size)
+
+        ret_dict = {
+            'pts': torch.FloatTensor(pts),
+            'rgb': torch.FloatTensor(rgb),
+            'rgb_choose': torch.IntTensor(rgb_choose).long(),
+            'model': torch.FloatTensor(model_points),
+            'all_tem': torch.FloatTensor(all_tem),
+            'all_tem_pts': torch.FloatTensor(all_tem_pts),
+            'all_tem_choose': torch.IntTensor(all_tem_choose).long(),
+        }
+        return ret_dict
 
 
 if __name__ == "__main__":
@@ -314,7 +415,7 @@ if __name__ == "__main__":
 
         # 使用DataLoader测试批量加载
         train_dataloader = build_dataloader(train_dataset, batch=cfg.TRAIN_DATA.BATCH_SIZE,
-                                                  workers=cfg.TRAIN_DATA.WORKERS, shuffle=True)
+                                            workers=cfg.TRAIN_DATA.WORKERS, shuffle=True)
         # collate_fn=None
         # {
         #     'rgb': [Tensor1, Tensor2, Tensor3, ...],  # 每个样本的 'rgb'

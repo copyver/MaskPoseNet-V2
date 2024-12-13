@@ -246,7 +246,7 @@ class AutoBackend(nn.Module):
         """
         return torch.tensor(x).to(self.device) if isinstance(x, np.ndarray) else x
 
-    def warmup(self, input_shapes=None):
+    def warmup(self, input_shapes):
         """
         使用字典输入方式对模型进行热身 (warmup)，通过一次前向传播确保模型初始化和加速。
         Args:
@@ -275,19 +275,7 @@ class AutoBackend(nn.Module):
             return
 
         if input_shapes is None:
-            input_shapes = {
-                'pts': (1, 1000, 3),
-                'rgb': (1, 1000, 3),
-                'rgb_choose': (1, 1000),
-                'translation_label': (1, 3),
-                'rotation_label': (1, 3, 3),
-                'tem1_rgb': (1, 200, 3),
-                'tem1_choose': (1, 200),
-                'tem1_pts': (1, 200, 3),
-                'tem2_rgb': (1, 200, 3),
-                'tem2_choose': (1, 200),
-                'tem2_pts': (1, 200, 3),
-            }
+            raise ValueError("input_shapes must be provided for warmup.")
 
         # 根据 fp16 或 fp32 创建dummy张量
         dtype = torch.half if self.fp16 else torch.float

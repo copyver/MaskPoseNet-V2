@@ -16,7 +16,6 @@ class PoseTrainer(BaseTrainer):
         return PoseNetDataset(cfg, is_train)
 
     def _set_up_loss(self):
-        self.loss_names = "coarse0", "coarse1", "coarse2", "fine0", "fine1", "fine2"
         return Loss().cuda()
 
     def progress_string(self):
@@ -72,7 +71,7 @@ class PoseTrainer(BaseTrainer):
     def get_validator(self):
         """Returns a DetectionValidator for YOLO model validation."""
         from engine.pose.posevalidator import PoseValidator
-        self.loss_names = "box_loss", "cls_loss", "dfl_loss"
+        self.loss_names = "coarse0", "coarse1", "coarse2", "fine0", "fine1", "fine2"
         return PoseValidator(
             self.test_loader, save_dir=self.save_dir, cfg=copy(self.cfg), _callbacks=self.callbacks
         )
