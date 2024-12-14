@@ -48,8 +48,8 @@ POSE_MODEL:
     UP_TYPE: LINEAR
     EMBED_DIM: 768
     OUT_DIM: 256
-    USE_PYRAMID_FEAT: TRUE
-    PRETRAINED: TRUE
+    USE_PYRAMID_FEAT: True
+    PRETRAINED: True
   GEO_EMBEDDING:
     SIGMA_D: 0.2
     SIGMA_A: 15
@@ -63,7 +63,7 @@ POSE_MODEL:
     OUT_DIM: 256
     TEMP: 0.1
     SIM_TYPE: COSINE
-    NORMALIZE_FEAT: TRUE
+    NORMALIZE_FEAT: True
     LOSS_DIS_THRES: 0.15
     NPROPOSAL1: 6000
     NPROPOSAL2: 300
@@ -77,7 +77,7 @@ POSE_MODEL:
     FOCUSING_FACTOR: 3
     TEMP: 0.1
     SIM_TYPE: COSINE
-    NORMALIZE_FEAT: TRUE
+    NORMALIZE_FEAT: True
     LOSS_DIS_THRES: 0.15
   FREEZE:
 
@@ -106,7 +106,7 @@ TRAIN_DATA:
 
 TEST_DATA:
   DATA_DIR: "/home/yhlever/DeepLearning/6D_object_pose_estimation/Datasets/HANDLE"
-  DATASET_DIR: "datasets_handle_4000t_800v"
+  DATASET_DIR: "datasets_handle_100t5v"
   TEMPLATE_DIR: "templates"
   MODEL_DIR: "models"
   DEPTH_SCALE: 5.0

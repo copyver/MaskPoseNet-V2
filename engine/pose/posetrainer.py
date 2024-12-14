@@ -57,14 +57,17 @@ class PoseTrainer(BaseTrainer):
         else:
             return keys
 
-    def get_dataloader(self, batch_size=16, rank=0, is_train=True):
-        """Construct and return dataloader."""
+    def get_dataset(self, rank=0, is_train=True):
         with torch_distributed_zero_first(rank):  # init dataset *.cache only once if DDP
             if is_train:
-                dataset = self.build_dataset(self.cfg.TRAIN_DATA, is_train)
+                return self.build_dataset(self.cfg.TRAIN_DATA, is_train)
             else:
-                dataset = self.build_dataset(self.cfg.TEST_DATA, is_train)
+                return self.build_dataset(self.cfg.TEST_DATA, is_train)
+
+    def get_dataloader(self, batch_size=16, rank=0, is_train=True):
+        """Construct and return dataloader."""
         shuffle = is_train
+        dataset = self.train_dataset if is_train else self.test_dataset
         workers = self.cfg.TRAIN_DATA.WORKERS if is_train else self.cfg.TEST_DATA.WORKERS
         return build_dataloader(dataset, batch_size, workers, shuffle, rank)  # return dataloader
 
@@ -73,5 +76,5 @@ class PoseTrainer(BaseTrainer):
         from engine.pose.posevalidator import PoseValidator
         self.loss_names = "coarse0", "coarse1", "coarse2", "fine0", "fine1", "fine2"
         return PoseValidator(
-            self.test_loader, save_dir=self.save_dir, cfg=copy(self.cfg), _callbacks=self.callbacks
+            self.test_dataset, self.test_loader, save_dir=self.save_dir, cfg=copy(self.cfg), _callbacks=self.callbacks
         )

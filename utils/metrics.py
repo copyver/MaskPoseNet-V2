@@ -3,6 +3,73 @@ import numpy as np
 from pathlib import Path
 
 
+def compute_translation_error_np(pred_Ts, gt_Ts):
+    """
+    计算平移误差。
+
+    Args:
+        pred_Ts (np.ndarray): 预测平移矩阵，形状为 (-1, 3)。
+        gt_Ts (np.ndarray): 真实平移矩阵，形状为 (-1, 3)。
+
+    Returns:
+        np.ndarray: 平移误差，形状为 (-1,)。
+    """
+    return np.linalg.norm(pred_Ts - gt_Ts, axis=1)
+
+
+def compute_rotation_error_np(pred_Rs, gt_Rs):
+    """
+    计算旋转误差。
+
+    Args:
+        pred_Rs (np.ndarray): 预测旋转矩阵，形状为 (-1, 9)，每行是展平的旋转矩阵。
+        gt_Rs (np.ndarray): 真实旋转矩阵，形状为 (-1, 9)。
+
+    Returns:
+        np.ndarray: 旋转误差（弧度），形状为 (-1,)。
+    """
+    pred_Rs = pred_Rs.reshape(-1, 3, 3)  # 恢复为 (-1, 3, 3)
+    gt_Rs = gt_Rs.reshape(-1, 3, 3)
+
+    R_diff = np.matmul(pred_Rs.transpose(0, 2, 1), gt_Rs)  # R_pred^T * R_gt
+    trace = np.trace(R_diff, axis1=1, axis2=2)  # 计算迹
+    trace = np.clip(trace, -1.0, 3.0)  # 防止数值误差导致 acos 超出定义域
+    return np.arccos((trace - 1) / 2)
+
+
+def compute_ADD_np(pred_Rs, pred_Ts, gt_Rs, gt_Ts, points):
+    """
+    计算几何一致性 ADD 指标。
+
+    Args:
+        pred_Rs (np.ndarray): 预测旋转矩阵，形状为 (-1, 9)。
+        pred_Ts (np.ndarray): 预测平移矩阵，形状为 (-1, 3)。
+        gt_Rs (np.ndarray): 真实旋转矩阵，形状为 (-1, 9)。
+        gt_Ts (np.ndarray): 真实平移矩阵，形状为 (-1, 3)。
+        points (np.ndarray): 物体点云，形状为 (n, 3)。
+
+    Returns:
+        np.ndarray: ADD 指标，形状为 (-1,)。
+    """
+    b = pred_Rs.shape[0]
+    n = points.shape[0]
+
+    pred_Rs = pred_Rs.reshape(-1, 3, 3)  # 恢复为 (-1, 3, 3)
+    gt_Rs = gt_Rs.reshape(-1, 3, 3)
+
+    # 扩展点云维度以与 batch 对齐
+    points = np.expand_dims(points, axis=0).repeat(b, axis=0)  # (b, n, 3)
+
+    # 预测点云位姿变换
+    pred_points = np.matmul(points, pred_Rs.transpose(0, 2, 1)) + pred_Ts[:, np.newaxis, :]  # (b, n, 3)
+    # 真实点云位姿变换
+    gt_points = np.matmul(points, gt_Rs.transpose(0, 2, 1)) + gt_Ts[:, np.newaxis, :]  # (b, n, 3)
+
+    # 计算 L2 距离
+    add_error = np.linalg.norm(pred_points - gt_points, axis=2).mean(axis=1)  # (b,)
+    return add_error
+
+
 class Metric(SimpleClass):
     """
     Class for computing evaluation metrics for YOLOv8 model.
@@ -175,59 +242,135 @@ class Metric(SimpleClass):
         ]
 
 
+class PoseMetric(SimpleClass):
+    """
+    Class for storing pose evaluation metrics results:
+    - re: rotation errors
+    - te: translation errors
+    - add: ADD errors
+    - ps: predicted pose scores
+    """
+
+    def __init__(self) -> None:
+        """Initializes a Metric instance for computing evaluation metrics for the YOLOv8 model."""
+        self.re = []
+        self.te = []
+        self.add = []
+        self.ps = []
+
+    def update(self, results):
+        """
+        Updates the evaluation metrics of the model with a new set of results.
+
+        Args:
+            results (tuple): A tuple containing:
+                - re (np.ndarray): rotation errors
+                - te (np.ndarray): translation errors
+                - add (np.ndarray): ADD errors
+                - ps (np.ndarray): predicted pose scores
+        """
+        self.re, self.te, self.add, self.ps = results
+
+    def fitness(self):
+        """
+        Model fitness as a weighted combination of metrics.
+        Here we assume fitness should reward high pose score and penalize large errors.
+        You can adjust weights as needed.
+        """
+        if len(self.re) == 0:
+            return 0.0
+        mean_re = np.mean(self.re)
+        mean_te = np.mean(self.te)
+        mean_add = np.mean(self.add)
+        mean_ps = np.mean(self.ps) if len(self.ps) else 0.0
+        # Example: fitness = mean_ps - (mean_re + mean_te + mean_add)
+        return mean_ps - (mean_re + mean_te + mean_add)
+
+
 class PoseMetrics(SimpleClass):
     """
-    Utility class for computing detection metrics such as precision, recall, and mean average precision (mAP) of an
-    object detection model.
-
-    Args:
-        save_dir (Path): A path to the directory where the output plots will be saved. Defaults to current directory.
-        plot (bool): A flag that indicates whether to plot precision-recall curves for each class. Defaults to False.
-        on_plot (func): An optional callback to pass plots path and data when they are rendered. Defaults to None.
-        names (dict of str): A dict of strings that represents the names of the classes. Defaults to an empty tuple.
+    Utility class for computing pose estimation metrics such as rotation error, translation error, and ADD.
 
     Attributes:
         save_dir (Path): A path to the directory where the output plots will be saved.
-        plot (bool): A flag that indicates whether to plot the precision-recall curves for each class.
-        names (dict of str): A dict of strings that represents the names of the classes.
-        speed (dict): A dictionary for storing the execution time of different parts of the detection process.
+        plot (bool): A flag that indicates whether to plot additional metrics or not.
+        on_plot (func): An optional callback for plot handling.
+        names (dict of str): A dict of strings for class names if needed.
+        pose (PoseMetric): An instance of PoseMetric class for storing pose metrics results.
 
     Methods:
-        process(): Updates the metric results with the latest batch of predictions.
-        keys: Returns a list of keys for accessing the computed pose metrics.
-        mean_results: Returns a list of mean values for the computed detection metrics.
-        class_result(i): Returns a list of values for the computed detection metrics for a specific class.
-        fitness: Todo
-        results_dict: Returns a dictionary that maps detection metric keys to their computed values.
+        process(pred_Rs, pred_Ts, gt_Rs, gt_Ts, points, pose_scores):
+            Process predicted results for pose estimation and update metrics.
+        pred_pose_score:
+            Returns the average pose score of the predicted poses.
+        keys:
+            Returns a list of keys for accessing specific metrics.
+        mean_results:
+            Returns mean values for translation error, rotation error, ADD, and predicted pose score.
+        fitness:
+            Returns the fitness of the pose estimation.
+        results_dict:
+            Returns a dictionary that maps pose metric keys to their computed values.
     """
 
-    def __init__(self, save_dir=Path("."), plot=False, on_plot=None, names={}) -> None:
+    def __init__(self, save_dir=Path("."), plot=False, on_plot=None, names=None) -> None:
         self.save_dir = save_dir
         self.plot = plot
         self.on_plot = on_plot
         self.names = names
         self.speed = {"preprocess": 0.0, "inference": 0.0, "loss": 0.0, "postprocess": 0.0}
         self.task = "pose"
+        self.pose = PoseMetric()
 
-    def process(self, tp, conf, pred_cls, target_cls):
-        """Process predicted results for object detection and update metrics."""
+    def process(self, pred_Rs, pred_Ts, gt_Rs, gt_Ts, points, pose_scores):
+        """
+        Process predicted results for pose estimation and update metrics.
+
+        Args:
+            pred_Rs (np.ndarray): Predicted rotations, shape (-1, 9)
+            pred_Ts (np.ndarray): Predicted translations, shape (-1, 3)
+            gt_Rs (np.ndarray): Ground truth rotations, shape (-1, 9)
+            gt_Ts (np.ndarray): Ground truth translations, shape (-1, 3)
+            points (np.ndarray): Object 3D model points, shape (n, 3)
+            pose_scores (np.ndarray): Pose confidence scores, shape (-1,)
+
+        Updates:
+            self.pose: updates pose metrics internal arrays.
+        """
+        if len(pred_Rs) == 0:
+            # No predictions, no updates
+            return
+        te = compute_translation_error_np(pred_Ts, gt_Ts)
+        re = compute_rotation_error_np(pred_Rs, gt_Rs)
+        add = compute_ADD_np(pred_Rs, pred_Ts, gt_Rs, gt_Ts, points)
+        ps = pose_scores
+        self.pose.update((re, te, add, ps))
 
     @property
     def pred_pose_score(self):
         """Returns the average pose score of the predicted bounding boxes."""
-        pass
+        return np.mean(self.pose.ps) if len(self.pose.ps) else 0.0
 
     @property
     def keys(self):
         """Returns a list of keys for accessing specific metrics."""
-        return ["metrics/pred_pose_score"]
+        return ["metrics/translation_err", "metrics/rotation_err", "metrics/ADD_err", "metrics/pred_pose_score"]
 
     @property
     def mean_results(self):
         """Returns a list of mean values for the computed detection metrics."""
-        return [self.pred_pose_score]
+        if len(self.pose.te) == 0:
+            return [0.0, 0.0, 0.0, 0.0]
+        return [np.mean(self.pose.te), np.mean(self.pose.re), np.mean(self.pose.add), self.pred_pose_score]
+
+    def fitness(self):
+        """Model fitness as a weighted combination of metrics."""
+        return self.pose.fitness()
 
     @property
     def results_dict(self):
         """Returns dictionary of computed performance metrics and statistics."""
         return dict(zip(self.keys, self.mean_results))
+
+
+

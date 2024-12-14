@@ -66,8 +66,6 @@ class BaseTrainer:
 
         # Model and Dataset
         self.model = model
-        # with torch_distributed_zero_first(LOCAL_RANK):  # avoid auto-downloading dataset multiple times
-        #     self.trainset, self.testset = self.get_dataset()
         self.ema = None
 
         # Optimization utils init
@@ -399,9 +397,11 @@ class BaseTrainer:
 
         # Dataloaders
         batch_size = self.batch_size // max(world_size, 1)
+        self.train_dataset = self.get_dataset(rank=LOCAL_RANK, is_train=True)
         self.train_loader = self.get_dataloader(batch_size=batch_size, rank=LOCAL_RANK, is_train=True)
         if RANK in {-1, 0}:
-            self.test_loader = self.get_dataloader(batch_size=batch_size, rank=-1, is_train=False)
+            self.test_dataset = self.get_dataset(self.cfg, is_train=False)
+            self.test_loader = self.get_dataloader(batch_size=self.cfg.TEST_DATA.BATCH_SIZE, rank=-1, is_train=False)
             self.validator = self.get_validator()
             metric_keys = self.validator.metrics.keys + self.label_loss_items(prefix="val")
             self.metrics = dict(zip(metric_keys, [0] * len(metric_keys)))
@@ -544,6 +544,9 @@ class BaseTrainer:
         else:
             self.lf = lambda x: max(1 - x / self.epochs, 0) * (1.0 - self.cfg.LR_SCHEDULER.LRF) + self.cfg.LR_SCHEDULER.LRF  # linear
         self.scheduler = optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=self.lf)
+
+    def get_dataset(self, rank=0, is_train=True):
+        raise NotImplementedError("get_dataset function not implemented in trainer")
 
     def get_dataloader(self, batch_size=16, rank=0, is_train=True):
         """Returns dataloader derived from torch.data.Dataloader."""

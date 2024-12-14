@@ -132,7 +132,7 @@ class PoseNetDataset(DatasetBase):
             return self.scene_camera_info[image_id_str]['cam_K']
         return None
 
-    def get_all_templates(self, category_id):
+    def get_all_templates(self, category_id, device):
         n_template_view = self.n_template_view
         all_tem_rgb = [[] for i in range(n_template_view)]
         all_tem_choose = [[] for i in range(n_template_view)]
@@ -140,14 +140,14 @@ class PoseNetDataset(DatasetBase):
 
         for i in range(n_template_view):
             tem_rgb, tem_choose, tem_pts = self.get_template(self.templates_dir, category_id, i)
-            all_tem_rgb[i].append(tem_rgb)
-            all_tem_choose[i].append(tem_choose)
-            all_tem_pts[i].append(tem_pts)
+            all_tem_rgb[i].append(torch.FloatTensor(tem_rgb))
+            all_tem_choose[i].append(torch.IntTensor(tem_choose).long())
+            all_tem_pts[i].append(torch.FloatTensor(tem_pts))
 
         for i in range(n_template_view):
-            all_tem_rgb[i] = np.stack(all_tem_rgb[i])
-            all_tem_choose[i] = np.stack(all_tem_choose[i])
-            all_tem_pts[i] = np.stack(all_tem_pts[i])
+            all_tem_rgb[i] = torch.stack(all_tem_rgb[i]).to(device, non_blocking=True)
+            all_tem_choose[i] = torch.stack(all_tem_choose[i]).to(device, non_blocking=True)
+            all_tem_pts[i] = torch.stack(all_tem_pts[i]).to(device, non_blocking=True)
 
         return all_tem_rgb, all_tem_pts, all_tem_choose
 
@@ -330,8 +330,6 @@ class PoseNetDataset(DatasetBase):
         if model_points is None:
             return None
 
-        all_tem, all_tem_pts, all_tem_choose = self.get_all_templates(category_id)
-
         # 加载目标物体mask
         mask = load_mask(valid_annotation, self.image_info[image_id]['height'], self.image_info[image_id]['width'])
         if mask is None or np.sum(mask) == 0:
@@ -372,9 +370,9 @@ class PoseNetDataset(DatasetBase):
             'rgb': torch.FloatTensor(rgb),
             'rgb_choose': torch.IntTensor(rgb_choose).long(),
             'model': torch.FloatTensor(model_points),
-            'all_tem': torch.FloatTensor(all_tem),
-            'all_tem_pts': torch.FloatTensor(all_tem_pts),
-            'all_tem_choose': torch.IntTensor(all_tem_choose).long(),
+            'obj': torch.IntTensor([category_id]).long(),
+            'translation_label': torch.FloatTensor(target_t),
+            'rotation_label': torch.FloatTensor(target_R),
         }
         return ret_dict
 

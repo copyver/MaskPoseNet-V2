@@ -14,14 +14,14 @@ from utils.torch_utils import (
     de_parallel,
 )
 from utils.torch_utils import smart_inference_mode
-
+from utils.metrics import PoseMetrics
 
 class BaseValidator(object):
     """
     Base class for all validators.
     """
 
-    def __init__(self, dataloader=None, save_dir=None, pbar=None, cfg=None, _callbacks=None):
+    def __init__(self, dataset=None, dataloader=None, save_dir=None, pbar=None, cfg=None, _callbacks=None):
         """
         Initializes a BaseValidator instance.
 
@@ -32,18 +32,18 @@ class BaseValidator(object):
             _callbacks (dict): Dictionary to store various callback functions.
         """
         self.cfg = cfg
+        self.dataset = dataset
         self.dataloader = dataloader
         self.pbar = pbar
         self.device = None
         self.training = True
         self.names = None
-        self.speed = {"preprocess": 0.0, "inference": 0.0, "loss": 0.0, "postprocess": 0.0}
-
+        self.speed = {"preprocess": 0.0, "inference": 0.0, "postprocess": 0.0}
         self.save_dir = save_dir
         self.save_dir.mkdir(parents=True, exist_ok=True)
-
         self.plots = {}
         self.callbacks = _callbacks
+
 
     @smart_inference_mode()
     def __call__(self, trainer=None, model=None):
@@ -94,7 +94,6 @@ class BaseValidator(object):
             Profile(device=self.device),
             Profile(device=self.device),
             Profile(device=self.device),
-            Profile(device=self.device),
         )
         bar = tqdm(self.dataloader, desc=self.get_desc(), total=len(self.dataloader))
         self.init_metrics(de_parallel(model))
@@ -109,13 +108,8 @@ class BaseValidator(object):
             with dt[1]:
                 preds = self.process(model, batch)
 
-            # Loss
-            with dt[2]:
-                if self.training:
-                    self.loss += model.loss(batch, preds)[1]
-
             # Postprocess
-            with dt[3]:
+            with dt[2]:
                 preds = self.postprocess(preds)
 
             self.update_metrics(preds, batch)
@@ -169,18 +163,17 @@ class BaseValidator(object):
     def process(self, model, batch):
         raise NotImplementedError("process function not implemented in validator")
 
-
     def postprocess(self, preds):
         """Preprocesses the predictions."""
-        return preds
+        raise NotImplementedError("postprocess function not implemented in validator")
 
     def init_metrics(self, model):
         """Initialize performance metrics for the YOLO model."""
-        pass
+        raise NotImplementedError("init_metrics function not implemented in validator")
 
     def update_metrics(self, preds, batch):
         """Updates metrics based on predictions and batch."""
-        pass
+        raise NotImplementedError("update_metrics function not implemented in validator")
 
     def finalize_metrics(self, *args, **kwargs):
         """Finalizes and returns all metrics."""

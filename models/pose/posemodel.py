@@ -10,6 +10,7 @@ from models.pose.model_utils import sample_pts_feats
 class PoseModel(nn.Module):
     def __init__(self, cfg):
         super(PoseModel, self).__init__()
+        self.names = 'pose model'
         self.cfg = cfg
         self.coarse_npoint = cfg.COARSE_NPOINT
         self.fine_npoint = cfg.FINE_NPOINT
