@@ -1,4 +1,4 @@
-import datetime
+from datetime import datetime
 import math
 import os
 import time
@@ -12,7 +12,6 @@ from loguru import logger
 from torch import distributed as dist
 from torch import optim
 from tqdm import tqdm
-
 from nn.tasks import attempt_load_one_weight
 from utils import colorstr, RANK, LOCAL_RANK
 from utils import yaml_print, yaml_save, logger_format_function
@@ -26,6 +25,7 @@ from utils.torch_utils import (
     EarlyStopping,
     TORCH_2_4,
     convert_optimizer_state_dict_to_fp16,
+    strip_optimizer,
 )
 
 
@@ -49,6 +49,7 @@ class BaseTrainer:
         self.tensorboard_logs_dir = self.output_dir / self.cfg.LOGS_NAME / self.cfg.SOLVERS.TENSORBOARD_LOGS_DIR
         self.checkpoint_dir = self.output_dir / self.cfg.LOGS_NAME / self.cfg.SOLVERS.CHECKPOINTS_DIR
         self.save_dir = self.output_dir / self.cfg.LOGS_NAME / self.cfg.SOLVERS.SAVE_DIR
+        self.last, self.best = self.checkpoint_dir / "last.pt", self.checkpoint_dir / "best.pt"
         logger.add(self.tensorboard_logs_dir / "log.txt", format=logger_format_function)
         if RANK in {-1, 0}:
             self.checkpoint_dir.mkdir(parents=True, exist_ok=True)  # make dir
@@ -262,9 +263,10 @@ class BaseTrainer:
             {
                 "epoch": self.epoch,
                 "best_fitness": self.best_fitness,
-                "model": None,  # resume and final checkpoints derive from EMA
+                # "model": deepcopy(self.model.state_dict()),
+                "model": deepcopy(self.model),
                 # "ema": deepcopy(self.ema.ema).half(),
-                "updates": self.ema.updates,
+                # "updates": self.ema.updates,
                 "optimizer": convert_optimizer_state_dict_to_fp16(deepcopy(self.optimizer.state_dict())),
                 "train_args": vars(self.cfg),  # save as dict
                 "train_metrics": {**self.metrics, **{"fitness": self.fitness}},
@@ -282,8 +284,8 @@ class BaseTrainer:
         self.last.write_bytes(serialized_ckpt)  # save last.pt
         if self.best_fitness == self.fitness:
             self.best.write_bytes(serialized_ckpt)  # save best.pt
-        if (self.save_period > 0) and (self.epoch % self.save_period == 0):
-            (self.wdir / f"epoch{self.epoch}.pt").write_bytes(serialized_ckpt)  # save epoch, i.e. 'epoch3.pt'
+        if (self.save_epoch_freq > 0) and (self.epoch % self.save_epoch_freq == 0):
+            (self.checkpoint_dir / f"epoch{self.epoch}.pt").write_bytes(serialized_ckpt)  # save epoch, i.e. 'epoch3.pt'
         # if self.args.close_mosaic and self.epoch == (self.epochs - self.args.close_mosaic - 1):
         #    (self.wdir / "last_mosaic.pt").write_bytes(serialized_ckpt)  # save mosaic checkpoint
 
@@ -292,6 +294,22 @@ class BaseTrainer:
         import pandas as pd  # scope for faster 'import ultralytics'
 
         return pd.read_csv(self.csv).to_dict(orient="list")
+
+    def final_eval(self):
+        """Performs final evaluation and validation for object detection YOLO model."""
+        ckpt = {}
+        for f in self.last, self.best:
+            if f.exists():
+                if f is self.last:
+                    ckpt = strip_optimizer(f)
+                elif f is self.best:
+                    k = "train_results"  # update best.pt train_metrics from last.pt
+                    strip_optimizer(f, updates={k: ckpt[k]} if k in ckpt else None)
+                    logger.info(f"\nValidating {f}...")
+                    self.validator.plots = self.cfg.SOLVERS.PLOTS
+                    self.metrics = self.validator(model=f)
+                    self.metrics.pop("fitness", None)
+                    self.run_callbacks("on_fit_epoch_end")
 
     def save_metrics(self, metrics):
         """Saves training metrics to a CSV file."""
@@ -408,7 +426,7 @@ class BaseTrainer:
             # self.ema = ModelEMA(self.model)
 
         if RANK in {-1, 0} and self.is_train:
-            time_log = "{0:%Y-%m-%d-%H-%M-%S-tensorboard/}".format(datetime.datetime.now())
+            time_log = "{0:%Y-%m-%d-%H-%M-%S-tensorboard/}".format(datetime.now())
             tensorboard_log_dir = self.tensorboard_logs_dir / time_log
             self.tensorboard_writer = TensorBoardWriter(tensorboard_log_dir)
 

@@ -1,6 +1,6 @@
 import os
 from functools import partial
-
+from loguru import logger
 import timm.models.vision_transformer
 import torch
 import torch.nn as nn
@@ -84,12 +84,12 @@ class ViT_AE(nn.Module):
                                    'models/pose/checkpoints')
 
             checkpoint = torch.load(vit_checkpoint, map_location='cpu')
-            print("load pre-trained checkpoint from: %s" % vit_checkpoint)
+            logger.info("load pre-trained checkpoint from: %s" % vit_checkpoint)
             checkpoint_model = checkpoint['model']
             state_dict = self.vit.state_dict()
             for k in ['head.weight', 'head.bias']:
                 if k in checkpoint_model and checkpoint_model[k].shape != state_dict[k].shape:
-                    print(f"Removing key {k} from pretrained checkpoint")
+                    logger.info(f"Removing key {k} from pretrained checkpoint")
                     del checkpoint_model[k]
             # interpolate position embedding
             interpolate_pos_embed(self.vit, checkpoint_model)

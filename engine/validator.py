@@ -16,6 +16,7 @@ from utils.torch_utils import (
 from utils.torch_utils import smart_inference_mode
 from utils.metrics import PoseMetrics
 
+
 class BaseValidator(object):
     """
     Base class for all validators.
