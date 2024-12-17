@@ -1,19 +1,16 @@
 NAME_PROJECT: MASKPOSENET
 
-
-LOGS_NAME: 20241216_Test_PoseTrain
-
-
 SOLVERS:
   DEVICE: 'cuda:0'
   GPU_IDS: [0]
   USE_DDP: False
   SEED: 42
   OUTPUT_DIR: './middle_log'
-  LOGS_NAME: '1126_train'
+  LOGS_NAME: '1217_train'
   TENSORBOARD_LOGS_DIR: 'logs'
   CHECKPOINTS_DIR: 'checkpoints'
-  SAVE_DIR: 'metrics'
+  METRIC_DIR: 'metrics'
+  RESULTS_DIR: 'results'
   SAVE_EPOCH_FREQ: 1
   PRINT_FREQ: 1
   EPOCHS: 2

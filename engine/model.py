@@ -1,15 +1,18 @@
 import inspect
 from pathlib import Path
 from typing import Union
-
+import numpy as np
 import torch.nn as nn
-
+import torch
 from engine import PoseTrainer, PosePredictor, PoseValidator, SegTrainer, SegPredictor, SegValidator
 from models import PoseModel, SegModel
 from nn.tasks import attempt_load_one_weight
 from utils import yaml_model_load, RANK
 from utils.callback import DefaultCallbacks
 from utils.torch_utils import print_model_summary
+from typing import Dict, List, Union
+from utils.results import Results
+from loguru import logger
 
 
 class Model(nn.Module):
@@ -59,7 +62,6 @@ class Model(nn.Module):
         self.model = self._smart_load("model")(cfg_dict.POSE_MODEL)  # build model
         print_model_summary(self.model)
 
-
     def _load(self, weights: str, task=None) -> None:
         """
         Loads a model from a checkpoint file or initializes it from a weights file.
@@ -82,16 +84,10 @@ class Model(nn.Module):
         """
         if Path(weights).suffix == ".pt":
             self.model, self.ckpt = attempt_load_one_weight(weights)
-            self.task = self.model.args["task"]
-            self.overrides = self.model.args = self._reset_ckpt_args(self.model.args)
+            self.task = task or self.model.task
             self.ckpt_path = self.model.pt_path
         else:
-            weights = checks.check_file(weights)  # runs in all cases, not redundant with above call
-            self.model, self.ckpt = weights, None
-            self.task = task or guess_model_task(weights)
-            self.ckpt_path = weights
-        self.overrides["model"] = weights
-        self.overrides["task"] = self.task
+            raise ValueError(f"Unsupported weights file '{weights}'")
         self.model_name = weights
 
     def train(self, trainer=None, **kwargs):
@@ -102,18 +98,65 @@ class Model(nn.Module):
             self.cfg.RESUME = self.ckpt_path
 
         self.trainer = (trainer or self._smart_load("trainer"))(cfg=self.cfg, model=self.model, callbacks=DefaultCallbacks)
-        # if not self.cfg.get("RESUME"):  # manually set model only if not resuming
-        #     self.trainer.model = self.trainer.get_model(weights=self.model if self.ckpt else None, cfg=self.model.yaml)
-        #     self.model = self.trainer.model
-
         self.trainer.train()
         # Update model and cfg after training
         if RANK in {-1, 0}:
             ckpt = self.trainer.best if self.trainer.best.exists() else self.trainer.last
             self.model, _ = attempt_load_one_weight(ckpt)
-            self.overrides = self.model.args
             self.metrics = getattr(self.trainer.validator, "metrics", None)  # TODO: no metrics returned by DDP
         return self.metrics
+
+    def predict(
+        self,
+        source: Union[str, Path, int, list, tuple, np.ndarray, torch.Tensor] = None,
+        stream: bool = False,
+        predictor=None,
+        **kwargs,
+    ) -> List[Results]:
+        """
+        Performs predictions on the given image source using the YOLO model.
+
+        This method facilitates the prediction process, allowing various configurations through keyword arguments.
+        It supports predictions with custom predictors or the default predictor method. The method handles different
+        types of image sources and can operate in a streaming mode.
+
+        Args:
+            source (str | Path | int | PIL.Image | np.ndarray | torch.Tensor | List | Tuple): The source
+                of the image(s) to make predictions on. Accepts various types including file paths, URLs, PIL
+                images, numpy arrays, and torch tensors.
+            stream (bool): If True, treats the input source as a continuous stream for predictions.
+            predictor (BasePredictor | None): An instance of a custom predictor class for making predictions.
+                If None, the method uses a default predictor.
+            **kwargs (Any): Additional keyword arguments for configuring the prediction process.
+
+        Returns:
+            (List[ultralytics.engine.results.Results]): A list of prediction results, each encapsulated in a
+                Results object.
+
+        Examples:
+            >>> model = YOLO("yolo11n.pt")
+            >>> results = model.predict(source="path/to/image.jpg", conf=0.25)
+            >>> for r in results:
+            ...     print(r.boxes.data)  # print detection bounding boxes
+
+        Notes:
+            - If 'source' is not provided, it defaults to the ASSETS constant with a warning.
+            - The method sets up a new predictor if not already present and updates its arguments with each call.
+            - For SAM-type models, 'prompts' can be passed as a keyword argument.
+        """
+        if source is None:
+            logger.warning(f"WARNING 'source' is missing. Using 'source={source}'.")
+
+        if not self.predictor:
+            self.predictor = predictor or self._smart_load("predictor")
+            self.predictor.setup_model(model=self.model, verbose=is_cli)
+        else:  # only update args if predictor is already setup
+            self.predictor.args = get_cfg(self.predictor.args, args)
+            if "project" in args or "name" in args:
+                self.predictor.save_dir = get_save_dir(self.predictor.args)
+        if prompts and hasattr(self.predictor, "set_prompts"):  # for SAM-type models
+            self.predictor.set_prompts(prompts)
+        return self.predictor.predict_cli(source=source) if is_cli else self.predictor(source=source, stream=stream)
 
     def _check_is_pytorch_model(self) -> None:
         """
@@ -136,7 +179,6 @@ class Model(nn.Module):
                 f"i.e. 'yolo predict model=yolov8n.onnx'.\nTo run CUDA or MPS inference please pass the device "
                 f"argument directly in your inference command, i.e. 'model.predict(source=..., device=0)'"
             )
-
 
     def _smart_load(self, key: str):
         """

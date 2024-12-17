@@ -1,15 +1,21 @@
 import json
 import os
 import time
-
+import trimesh
 import cv2
 import numpy as np
 from loguru import logger
 from pycocotools import mask as mask_utils
+import torchvision.transforms as transforms
+import torch
+from pathlib import Path
 
 """
 Helper functions for loading data.
 """
+IMG_FORMATS = {"bmp", "dng", "jpeg", "jpg", "mpo", "png", "tif", "tiff", "webp", "pfm", "heic"}  # image suffixes
+VID_FORMATS = {"asf", "avi", "gif", "m4v", "mkv", "mov", "mp4", "mpeg", "mpg", "ts", "wmv", "webm"}  # video suffixes
+DEAFULT_MODEL_DIR = "/home/yhlever/DeepLearning/6D_object_pose_estimation/Datasets/HANDLE/models"
 
 
 def _isArrayLike(obj):
@@ -204,3 +210,105 @@ def get_random_rotation():
         [0, 0, 1]
     ])
     return rand_rotation
+
+
+def get_models(file_base, category_id, n_sample):
+    category_id_str = f"obj_{int(category_id):02d}.obj"
+    mesh_path = os.path.join(file_base, category_id_str)
+    mesh = trimesh.load(mesh_path, force='mesh')
+    model_pts, _ = trimesh.sample.sample_surface(mesh, n_sample)
+    return model_pts.astype(np.float32)
+
+
+def load_image_if_path(input_data, flags=cv2.IMREAD_COLOR):
+    if isinstance(input_data, (str, Path)):
+        input_data = str(input_data)
+        img = cv2.imread(input_data, flags)
+        if img is None:
+            raise FileNotFoundError(f"Image not found at {input_data}")
+        return img
+    return input_data
+
+
+def load_pose_inference_source(image, depth_image, mask, obj, camera_k,
+                               cfg, model_dir=None):
+    """
+    加载用于位姿推理的数据源，将图像、深度图和mask进行规范化处理，
+    并生成点云、RGB、模型点以及其他相关信息的字典。
+
+    Args:
+        image: 可以是图像路径 (str/Path) 或者是通过cv2读取的numpy图片(BGR格式)。
+        depth_image: 可以是深度图路径 (str/Path) 或者是深度的numpy数组。
+        mask: 可以是掩码路径 (str/Path) 或者是掩码的numpy数组(0-1或0-255)。
+        obj: 对象ID
+        camera_k: 相机内参(3x3)
+        cfg: 配置对象
+        model_dir: 模型目录路径，可选，如果不提供则使用cfg中的默认路径
+
+    Returns:：
+        包含pts, rgb, rgb_choose, model, obj的字典。
+    """
+
+    # 加载/检查image
+    image = load_image_if_path(image, flags=cv2.IMREAD_COLOR)
+    if image is None or not isinstance(image, np.ndarray):
+        raise ValueError("Image is not a valid numpy array")
+
+    # 加载/检查depth_image
+    depth_image = load_image_if_path(depth_image, flags=cv2.IMREAD_UNCHANGED)
+    if depth_image is None or not isinstance(depth_image, np.ndarray):
+        raise ValueError("Depth image is not a valid numpy array")
+
+    # 加载/检查mask
+    mask = load_image_if_path(mask, flags=cv2.IMREAD_GRAYSCALE)
+    if mask is None or not isinstance(mask, np.ndarray):
+        raise ValueError("Mask is not a valid numpy array")
+
+    # 检查mask值范围，若在0-1之间则转换到0-255
+    if mask.max() <= 1.0:
+        mask = (mask * 255).astype(np.uint8)
+    else:
+        mask = mask.astype(np.uint8)
+
+    camera_k = np.array(camera_k, dtype=np.float32).reshape(3, 3)
+
+    model_dir = model_dir or Path(cfg.DATA_DIR) / cfg.MODEL_DIR
+    model_points = get_models(model_dir, obj, cfg.N_SAMPLE_MODEL_POINT)
+    if model_points is None:
+        return None
+
+    bbox = get_bbox(mask > 0)
+    y1, y2, x1, x2 = bbox
+    mask = mask[y1:y2, x1:x2]
+    choose = mask.astype(np.float32).flatten().nonzero()[0]
+
+    depth = depth_image * cfg.DEPTH_SCALE / 1000.0
+    pts = get_point_cloud_from_depth(depth, camera_k, [y1, y2, x1, x2])
+    pts = pts.reshape(-1, 3)[choose, :]
+
+    if len(choose) <= cfg.n_sample_observed_point:
+        choose_idx = np.random.choice(np.arange(len(choose)), cfg.n_sample_observed_point)
+    else:
+        choose_idx = np.random.choice(np.arange(len(choose)), cfg.n_sample_observed_point, replace=False)
+    choose = choose[choose_idx]
+    pts = pts[choose_idx]
+
+    rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    rgb = rgb[y1:y2, x1:x2, :]
+    if cfg.RGB_MASK_FLAG:
+        rgb = rgb * (mask[:, :, None] > 0).astype(np.uint8)
+    rgb = cv2.resize(rgb, (cfg.IMG_SIZE, cfg.IMG_SIZE), interpolation=cv2.INTER_LINEAR)
+    transform = transforms.Compose([transforms.ToTensor(),
+                                    transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                                         std=[0.229, 0.224, 0.225])])
+    rgb = transform(rgb)
+    rgb_choose = get_resize_rgb_choose(choose, [y1, y2, x1, x2], cfg.IMG_SIZE)
+
+    ret_dict = {
+        'pts': torch.FloatTensor(pts),
+        'rgb': torch.FloatTensor(rgb),
+        'rgb_choose': torch.IntTensor(rgb_choose).long(),
+        'model': torch.FloatTensor(model_points),
+        'obj': torch.IntTensor([obj]).long(),
+    }
+    return ret_dict

@@ -76,5 +76,5 @@ class PoseTrainer(BaseTrainer):
         from engine.pose.posevalidator import PoseValidator
         self.loss_names = "coarse0", "coarse1", "coarse2", "fine0", "fine1", "fine2"
         return PoseValidator(
-            self.test_dataset, self.test_loader, save_dir=self.save_dir, cfg=copy(self.cfg), _callbacks=self.callbacks
+            self.test_dataset, self.test_loader, save_dir=self.metric_dir, cfg=copy(self.cfg), _callbacks=self.callbacks
         )

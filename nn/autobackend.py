@@ -25,9 +25,8 @@ class AutoBackend(nn.Module):
     @torch.no_grad()
     def __init__(
             self,
-            weights="yolo11n.pt",
+            weights,
             device=torch.device("cpu"),
-            dnn=False,
             fp16=False,
             batch=1,
             verbose=True,
@@ -38,7 +37,6 @@ class AutoBackend(nn.Module):
         Args:
             weights (str): Path to the model weights file. Defaults to 'yolov8n.pt'.
             device (torch.device): Device to run the model on. Defaults to CPU.
-            dnn (bool): Use OpenCV DNN module for ONNX inference. Defaults to False.
             fp16 (bool): Enable half-precision inference. Supported only on specific backends. Defaults to False.
             batch (int): Batch-size to assume for inference.
             verbose (bool): Enable verbose logging. Defaults to True.
@@ -168,7 +166,6 @@ class AutoBackend(nn.Module):
 
         # ONNX Runtime
         elif self.onnx:
-            import numpy as np
             input_feed = {}
             for inp in self.session.get_inputs():
                 inp_name = inp.name

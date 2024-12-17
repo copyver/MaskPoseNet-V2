@@ -46,9 +46,9 @@ class BaseTrainer:
 
         self.output_dir = Path(self.cfg.SOLVERS.OUTPUT_DIR)
         self.logs_name = self.cfg.SOLVERS.LOGS_NAME
-        self.tensorboard_logs_dir = self.output_dir / self.cfg.LOGS_NAME / self.cfg.SOLVERS.TENSORBOARD_LOGS_DIR
-        self.checkpoint_dir = self.output_dir / self.cfg.LOGS_NAME / self.cfg.SOLVERS.CHECKPOINTS_DIR
-        self.save_dir = self.output_dir / self.cfg.LOGS_NAME / self.cfg.SOLVERS.SAVE_DIR
+        self.tensorboard_logs_dir = self.output_dir / self.cfg.SOLVERS.LOGS_NAME / self.cfg.SOLVERS.TENSORBOARD_LOGS_DIR
+        self.checkpoint_dir = self.output_dir / self.cfg.SOLVERS.LOGS_NAME / self.cfg.SOLVERS.CHECKPOINTS_DIR
+        self.metric_dir = self.output_dir / self.cfg.SOLVERS.LOGS_NAME / self.cfg.SOLVERS.METRIC_DIR
         self.last, self.best = self.checkpoint_dir / "last.pt", self.checkpoint_dir / "best.pt"
         logger.add(self.tensorboard_logs_dir / "log.txt", format=logger_format_function)
         if RANK in {-1, 0}:
@@ -67,7 +67,6 @@ class BaseTrainer:
 
         # Model and Dataset
         self.model = model
-        self.ema = None
 
         # Optimization utils init
         self.lf = None
@@ -263,18 +262,12 @@ class BaseTrainer:
             {
                 "epoch": self.epoch,
                 "best_fitness": self.best_fitness,
-                # "model": deepcopy(self.model.state_dict()),
                 "model": deepcopy(self.model),
-                # "ema": deepcopy(self.ema.ema).half(),
-                # "updates": self.ema.updates,
                 "optimizer": convert_optimizer_state_dict_to_fp16(deepcopy(self.optimizer.state_dict())),
                 "train_args": vars(self.cfg),  # save as dict
                 "train_metrics": {**self.metrics, **{"fitness": self.fitness}},
                 "train_results": self.read_results_csv(),
                 "date": datetime.now().isoformat(),
-                # "version": __version__,
-                # "license": "AGPL-3.0 (https://ultralytics.com/license)",
-                # "docs": "https://docs.ultralytics.com",
             },
             buffer,
         )
@@ -294,6 +287,9 @@ class BaseTrainer:
         import pandas as pd  # scope for faster 'import ultralytics'
 
         return pd.read_csv(self.csv).to_dict(orient="list")
+
+    def plot_metrics(self):
+        pass
 
     def final_eval(self):
         """Performs final evaluation and validation for object detection YOLO model."""
@@ -537,9 +533,7 @@ class BaseTrainer:
         if ckpt.get("optimizer", None) is not None:
             self.optimizer.load_state_dict(ckpt["optimizer"])  # optimizer
             best_fitness = ckpt["best_fitness"]
-        if self.ema and ckpt.get("ema"):
-            self.ema.ema.load_state_dict(ckpt["ema"].float().state_dict())  # EMA
-            self.ema.updates = ckpt["updates"]
+
         assert start_epoch > 0, (
             f"{self.cfg.model} training to {self.epochs} epochs is finished, nothing to resume.\n"
             f"Start a new training without resuming, i.e. 'train model={self.cfg.model}'"
@@ -552,8 +546,6 @@ class BaseTrainer:
             self.epochs += ckpt["epoch"]  # finetune additional epochs
         self.best_fitness = best_fitness
         self.start_epoch = start_epoch
-        if start_epoch > (self.epochs - self.cfg.close_mosaic):
-            self._close_dataloader_mosaic()
 
     def _setup_scheduler(self):
         """Initialize training learning rate scheduler."""

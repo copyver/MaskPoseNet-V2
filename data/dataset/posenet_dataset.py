@@ -387,16 +387,13 @@ if __name__ == "__main__":
         cfg_dict = yaml.safe_load(f)
     cfg = edict(cfg_dict)
 
-
     # 测试代码
     def test_posenet_dataset():
         print("开始测试PoseNetDataset加载...")
 
-        # 创建PoseNetDataset实例
         train_dataset = PoseNetDataset(cfg.TRAIN_DATA, is_train=True)
         print(f"数据集加载完成，共有 {len(train_dataset)} 张训练图片")
 
-        # 加载数据
         index = random.randint(0, len(train_dataset) - 1)
         print(f"随机选取样本索引: {index}")
 
@@ -433,5 +430,32 @@ if __name__ == "__main__":
 
             break
 
+    def test_point_cloud():
+        from utils.visualize import visualize_point_cloud
+        train_dataset = PoseNetDataset(cfg.TRAIN_DATA, is_train=True)
+        print(f"数据集加载完成，共有 {len(train_dataset)} 张训练图片")
 
-    test_posenet_dataset()
+        index = random.randint(0, len(train_dataset) - 1)
+        print(f"随机选取样本索引: {index}")
+
+        train_data = train_dataset.get_train_data(index)
+        if train_data is None:
+            print(f"样本 {index} 加载失败，可能数据不足或标注缺失")
+        else:
+            pts = train_data['pts'].cpu().numpy()
+            rgb = train_data['rgb'].cpu().numpy()
+            target_t = train_data['translation_label'].cpu().numpy().astype(np.float64)
+            target_R = train_data['rotation_label'].cpu().numpy().astype(np.float64)
+
+            tem1_pts = train_data['tem1_pts'].cpu().numpy().astype(np.float64)
+            tem2_pts = train_data['tem2_pts'].cpu().numpy().astype(np.float64)
+
+            # 使用给定的旋转和平移对 pts 进行变换
+            target_pts = (pts - target_t[None, :]) @ target_R
+
+            # 合并 tem1_pts 和 tem2_pts
+            tem_pts = np.concatenate([tem1_pts, tem2_pts], axis=0)
+            visualize_point_cloud(target_pts, tem_pts)
+
+    test_point_cloud()
+    # test_posenet_dataset()

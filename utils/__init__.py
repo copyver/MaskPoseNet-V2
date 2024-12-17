@@ -5,7 +5,6 @@ from loguru import logger
 import re
 import platform
 import os
-
 MACOS, LINUX, WINDOWS = (platform.system() == x for x in ["Darwin", "Linux", "Windows"])
 PIN_MEMORY = str(os.getenv("PIN_MEMORY", True)).lower() == "true"
 NUM_THREADS = min(8, max(1, os.cpu_count() - 1))
@@ -174,6 +173,7 @@ def yaml_print(configs):
     Args:
         configs (dict): 从 YAML 文件读取的配置字典。
     """
+
     def _print_dict(d, level=0):
         """递归打印字典内容，支持缩进和不同颜色显示"""
         indent = "  " * level
@@ -272,6 +272,29 @@ class SimpleClass:
         """Custom attribute access error message with helpful information."""
         name = self.__class__.__name__
         raise AttributeError(f"'{name}' object has no attribute '{attr}'. See valid attributes below.\n{self.__doc__}")
+
+
+def get_override_cfg(cfg=None, **kwargs):
+    """
+    合并 cfg 和 kwargs，检查 cfg 中的键是否存在，若存在则覆盖，不存在则新增。
+
+    Args:
+        cfg (EasyDict, optional): 原始配置字典。默认 None。
+        **kwargs: 需要添加或覆盖的配置参数。
+
+    Returns:
+        EasyDict: 合并后的配置字典。
+    """
+    # 初始化 cfg 为 EasyDict
+    if cfg is None:
+        cfg = edict()
+    elif not isinstance(cfg, edict):
+        raise TypeError("cfg must be an EasyDict object")
+
+    for key, value in kwargs.items():
+        cfg.key = value  # 添加或更新 cfg
+
+    return cfg
 
 
 if __name__ == "__main__":

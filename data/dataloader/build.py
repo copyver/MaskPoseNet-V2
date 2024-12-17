@@ -5,6 +5,8 @@ import numpy as np
 import random
 from utils import PIN_MEMORY
 from utils import RANK
+from pathlib import Path
+from data.dataset.data_utils import IMG_FORMATS, VID_FORMATS
 
 
 class InfiniteDataLoader(dataloader.DataLoader):
