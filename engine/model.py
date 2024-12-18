@@ -13,6 +13,7 @@ from utils.torch_utils import print_model_summary
 from typing import Dict, List, Union
 from utils.results import Results
 from loguru import logger
+from easydict import EasyDict as edict
 
 
 class Model(nn.Module):
@@ -86,6 +87,8 @@ class Model(nn.Module):
             self.model, self.ckpt = attempt_load_one_weight(weights)
             self.task = task or self.model.task
             self.ckpt_path = self.model.pt_path
+            self.cfg = edict(self.ckpt['train_args'])
+            print(self.ckpt['train_args'].keys())
         else:
             raise ValueError(f"Unsupported weights file '{weights}'")
         self.model_name = weights
@@ -108,7 +111,7 @@ class Model(nn.Module):
 
     def predict(
         self,
-        source: Union[str, Path, int, list, tuple, np.ndarray, torch.Tensor] = None,
+        source: Dict = None,
         stream: bool = False,
         predictor=None,
         **kwargs,
@@ -148,15 +151,12 @@ class Model(nn.Module):
             logger.warning(f"WARNING 'source' is missing. Using 'source={source}'.")
 
         if not self.predictor:
-            self.predictor = predictor or self._smart_load("predictor")
-            self.predictor.setup_model(model=self.model, verbose=is_cli)
-        else:  # only update args if predictor is already setup
-            self.predictor.args = get_cfg(self.predictor.args, args)
-            if "project" in args or "name" in args:
-                self.predictor.save_dir = get_save_dir(self.predictor.args)
-        if prompts and hasattr(self.predictor, "set_prompts"):  # for SAM-type models
-            self.predictor.set_prompts(prompts)
-        return self.predictor.predict_cli(source=source) if is_cli else self.predictor(source=source, stream=stream)
+            self.predictor = (predictor or self._smart_load("predictor"))(cfg=self.cfg,
+                                                                          save_dir=self.cfg.SOLVERS.RESULTS_DIR,
+                                                                          _callbacks=DefaultCallbacks)
+            self.predictor.setup_model(model=self.model)
+
+        return self.predictor(source=source, stream=stream)
 
     def _check_is_pytorch_model(self) -> None:
         """

@@ -31,7 +31,7 @@ def visualize_pose_bbox(results, save_path):
     rgb = results['image']
     pred_rot = results['pred_Rs']
     pred_trans = results['pred_Ts']
-    model_points = results['model_points']
+    model_points = results['whole_model_points']  # Todo:(b,1024,3), need to based on obj turns it to (1024, 3)
     K = results['camera_k']
 
     # draw_detections返回numpy数组格式的图像
@@ -64,7 +64,7 @@ def calculate_2d_projections(coordinates_3d, intrinsics):
     return projected_coordinates
 
 
-def get_3d_bbox(scale, shift = 0):
+def get_3d_bbox(scale, shift=0):
     """
     Input:
         scale: [3] or scalar

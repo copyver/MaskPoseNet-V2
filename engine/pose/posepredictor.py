@@ -13,12 +13,12 @@ from utils.torch_utils import (
     select_device,
 )
 from utils.visualize import visualize_pose_bbox
-from data.dataset.data_utils import load_pose_inference_source
+from data.dataset.data_utils import load_pose_inference_source, get_all_templates
 
 
 class PosePredictor(BasePredictor):
-    def __init__(self, cfg=None, save_dir=None, _callbacks=None):
-        super(PosePredictor, self).__init__(cfg, save_dir, _callbacks)
+    def __init__(self, cfg=None, save_dir=None, verbose=False,  _callbacks=None, **kwargs):
+        super(PosePredictor, self).__init__(cfg, save_dir, verbose, _callbacks, **kwargs)
 
     def setup_source(self, source):
         """Sets up source and inference mode."""
@@ -29,15 +29,17 @@ class PosePredictor(BasePredictor):
             source["obj"],
             source["camera_k"]
         )
-        self.dataset, whole_model_points = load_pose_inference_source(
+        self.dataset, image, whole_pts, whole_model_points = load_pose_inference_source(
             image=image,
             depth_image=depth_image,
             mask=seg_mask,
             obj=obj,
             camera_k=camera_k,
-            cfg=self.cfg,
+            cfg=self.cfg.TEST_DATA,
         )
-        source['model_points'] = whole_model_points
+        source['whole_pts'] = whole_pts
+        source['image'] = image
+        source['whole_model_points'] = whole_model_points
 
     @smart_inference_mode()
     def stream_inference(self, source=None, model=None, *args, **kwargs):
@@ -54,7 +56,7 @@ class PosePredictor(BasePredictor):
             self.setup_source(source)
 
             # Check if save_dir/ label file exists
-            if self.cfg.SAVE:
+            if self.save_dir is not None:
                 self.save_dir.mkdir(parents=True, exist_ok=True)
 
             # Warmup model
@@ -77,38 +79,38 @@ class PosePredictor(BasePredictor):
                 Profile(device=self.device),
             )
             self.run_callbacks("on_predict_start")
-            for batch in self.dataset:
-                self.run_callbacks("on_predict_batch_start")
+            batch = self.dataset
+            self.run_callbacks("on_predict_batch_start")
 
-                # Preprocess
-                with profilers[0]:
-                    batch = self.preprocess(batch)
+            # Preprocess
+            with profilers[0]:
+                batch = self.preprocess(batch)
 
-                # Inference
-                with profilers[1]:
-                    preds = self.inference(batch)
+            # Inference
+            with profilers[1]:
+                preds = self.inference(batch)
 
-                # Postprocess
-                with profilers[2]:
-                    self.results = self.postprocess(preds)
-                    self.results.update(source)
+            # Postprocess
+            with profilers[2]:
+                self.results = self.postprocess(preds)
+                self.results.update(source)
 
-                self.run_callbacks("on_predict_postprocess_end")
-                # Visualize, save, write results
-                n = batch['pts'].size(0)
-                for i in range(n):
-                    self.seen += 1
-                    self.results[i].speed = {
-                        "preprocess": profilers[0].dt * 1e3 / n,
-                        "inference": profilers[1].dt * 1e3 / n,
-                        "postprocess": profilers[2].dt * 1e3 / n,
-                    }
+            self.run_callbacks("on_predict_postprocess_end")
+            # Visualize, save, write results
 
-                # Print batch results
-                if self.verbose:
-                    logger.info("\n")
+            self.seen += 1
+            n = batch['pts'].size(0)
+            self.results.update({"speed": {
+                "preprocess": profilers[0].dt * 1e3 / n,
+                "inference": profilers[1].dt * 1e3 / n,
+                "postprocess": profilers[2].dt * 1e3 / n,
+            }})
 
-                self.run_callbacks("on_predict_batch_end")
+            # Print batch results
+            if self.verbose:
+                logger.info("\n")
+
+            self.run_callbacks("on_predict_batch_end")
 
         # Print final results
         if self.verbose and self.seen:
@@ -141,14 +143,14 @@ class PosePredictor(BasePredictor):
         all_dense_fo = []
 
         for o in obj:
-            all_tem, all_tem_pts, all_tem_choose = self.dataset.get_all_templates(o, self.device)
+            all_tem, all_tem_pts, all_tem_choose = get_all_templates(self.cfg.TEST_DATA, o, self.device)
 
             # 调用特征提取函数
             dense_po, dense_fo = self.model.model.feature_extraction.get_obj_feats(
                 all_tem, all_tem_pts, all_tem_choose
             )
-            all_dense_po.append(dense_po)
-            all_dense_fo.append(dense_fo)
+            all_dense_po.append(dense_po.squeeze(0))
+            all_dense_fo.append(dense_fo.squeeze(0))
 
         batch_dense_po = torch.stack(all_dense_po, dim=0)  # [batch, ...]
         batch_dense_fo = torch.stack(all_dense_fo, dim=0)  # [batch, ...]
@@ -183,7 +185,7 @@ class PosePredictor(BasePredictor):
         automodel = AutoBackend(
             weights=model,
             device=select_device(device=self.cfg.SOLVERS.DEVICE, batch=self.cfg.TRAIN_DATA.BATCH_SIZE),
-            fp16=self.cfg.HALF,
+            fp16=False,
         )
 
         self.device = automodel.device  # update device

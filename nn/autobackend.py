@@ -312,6 +312,7 @@ class AutoBackend(nn.Module):
         types = [s in name for s in sf]
         types[5] |= name.endswith(".mlmodel")  # retain support for older Apple CoreML *.mlmodel formats
         types[8] &= not types[9]  # tflite &= not edgetpu
+        triton = False
         if any(types):
             triton = False
         return types + [triton]

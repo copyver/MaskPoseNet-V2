@@ -220,6 +220,68 @@ def get_models(file_base, category_id, n_sample):
     return model_pts.astype(np.float32)
 
 
+def transform(image):
+    return transforms.Compose([transforms.ToTensor(),
+                               transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                                    std=[0.229, 0.224, 0.225])])(image)
+
+
+def get_template(cfg, category_id, tem_index=0):
+    file_base = cfg.TEMPLATE_DIR
+    category_id_str = f"obj_{int(category_id):02d}"
+    rgb_path = os.path.join(file_base, category_id_str, f'rgb_{tem_index}.png')
+    xyz_path = os.path.join(file_base, category_id_str, f'xyz_{tem_index}.npy')
+    mask_path = os.path.join(file_base, category_id_str, f'mask_{tem_index}.png')
+
+    mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE) == 255
+    bbox = get_bbox(mask)
+    y1, y2, x1, x2 = bbox
+    mask = mask[y1:y2, x1:x2]
+
+    rgb = cv2.imread(rgb_path, cv2.IMREAD_COLOR)
+    rgb = cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB)
+    rgb = rgb[y1:y2, x1:x2, :]
+
+    if cfg.RGB_MASK_FLAG:
+        rgb = rgb * (mask[:, :, None] > 0).astype(np.uint8)
+    rgb = cv2.resize(rgb, (cfg.IMG_SIZE, cfg.IMG_SIZE), interpolation=cv2.INTER_LINEAR)
+    rgb = transform(rgb)
+
+    choose = mask.astype(np.float32).flatten().nonzero()[0]
+    if len(choose) <= cfg.N_SAMPLE_TEMPLATE_POINT:
+        choose_idx = np.random.choice(np.arange(len(choose)), cfg.N_SAMPLE_TEMPLATE_POINT)
+    else:
+        choose_idx = np.random.choice(np.arange(len(choose)), cfg.N_SAMPLE_TEMPLATE_POINT, replace=False)
+    choose = choose[choose_idx]
+
+    xyz = np.load(xyz_path).astype(np.float32)
+    xyz = convert_blender_to_pyrender(xyz)[y1:y2, x1:x2, :]
+    xyz = xyz.reshape((-1, 3))[choose, :]
+    choose = get_resize_rgb_choose(choose, [y1, y2, x1, x2], cfg.IMG_SIZE)
+
+    return rgb, choose, xyz
+
+
+def get_all_templates(cfg, category_id, device):
+    n_template_view = cfg.N_TEMPLATE_VIEW
+    all_tem_rgb = [[] for i in range(n_template_view)]
+    all_tem_choose = [[] for i in range(n_template_view)]
+    all_tem_pts = [[] for i in range(n_template_view)]
+
+    for i in range(n_template_view):
+        tem_rgb, tem_choose, tem_pts = get_template(cfg, category_id, i)
+        all_tem_rgb[i].append(torch.FloatTensor(tem_rgb))
+        all_tem_choose[i].append(torch.IntTensor(tem_choose).long())
+        all_tem_pts[i].append(torch.FloatTensor(tem_pts))
+
+    for i in range(n_template_view):
+        all_tem_rgb[i] = torch.stack(all_tem_rgb[i]).to(device, non_blocking=True)
+        all_tem_choose[i] = torch.stack(all_tem_choose[i]).to(device, non_blocking=True)
+        all_tem_pts[i] = torch.stack(all_tem_pts[i]).to(device, non_blocking=True)
+
+    return all_tem_rgb, all_tem_pts, all_tem_choose
+
+
 def load_image_if_path(input_data, flags=cv2.IMREAD_COLOR):
     if isinstance(input_data, (str, Path)):
         input_data = str(input_data)
@@ -232,37 +294,37 @@ def load_image_if_path(input_data, flags=cv2.IMREAD_COLOR):
 
 def load_pose_inference_source(image, depth_image, mask, obj, camera_k, cfg, model_dir=None):
     """
-    加载用于位姿推理的数据源，将图像、深度图和mask进行规范化处理，
-    并生成点云、RGB、模型点以及其他相关信息的字典（支持多对象批次输出）。
+    Loads data sources for pose estimation, normalizes the input image, depth map, and mask,
+    and generates a dictionary containing point clouds, RGB data, model points, and other relevant information.
+    Supports batch processing for multiple objects.
 
     Args:
-        image: 图像路径 (str/Path) 或者通过cv2读取的numpy数组(BGR格式)
-        depth_image: 深度图路径 (str/Path) 或通过cv2读取的numpy数组(深度)
-        mask: 单个或多个掩码路径 (str/Path) 或 numpy数组(0-1或0-255)
-              若有多个对象，请传入列表，与obj一一对应
-        obj: 单个或多个对象ID(整数)，若有多个对象请传入列表
-        camera_k: 相机内参(3x3)
-        cfg: 配置对象
-        model_dir: 模型目录路径，可选，如果不提供则使用cfg中的默认路径
+        image (str or Path or numpy.ndarray):
+            Path to the image or a numpy array in BGR format loaded with cv2.
+        depth_image (str or Path or numpy.ndarray):
+            Path to the depth map or a numpy array representing depth values.
+        mask (str or Path or numpy.ndarray or list):
+            Single or multiple mask paths or numpy arrays with values in the range [0, 1] or [0, 255].
+            For multiple objects, provide a list of masks corresponding to each object in `obj`.
+        obj (int or list):
+            Single or multiple object IDs. For multiple objects, provide a list of IDs.
+        camera_k (numpy.ndarray):
+            Camera intrinsic matrix of shape (3, 3).
+        cfg:
+            Configuration object containing system and data parameters.
+        model_dir (str or Path, optional):
+            Path to the model directory. If not specified, the default path from `cfg` will be used.
 
     Returns:
-        一个包含以下键值的字典，每个值为一个批次tensor：
-            'pts': shape [batch, n_sample_observed_point, 3]
-            'rgb': shape [batch, 3, IMG_SIZE, IMG_SIZE]
-            'rgb_choose': shape [batch, n_sample_observed_point]
-            'model': shape [batch, N_SAMPLE_MODEL_POINT, 3]
-            'obj': shape [batch]
+        dict: A dictionary containing the following keys:
+            - 'pts': A numpy array of shape [batch, n_sample_observed_point, 3] representing point clouds.
+            - 'rgb': A numpy array of shape [batch, 3, IMG_SIZE, IMG_SIZE] containing normalized RGB data.
+            - 'rgb_choose': A numpy array of shape [batch, n_sample_observed_point] with chosen RGB indices.
+            - 'model': A numpy array of shape [batch, N_SAMPLE_MODEL_POINT, 3] representing model points.
+            - 'obj': A numpy array of shape [batch] containing object IDs.
+        numpy.ndarray: The original RGB image.
+        numpy.ndarray: The complete set of model points.
     """
-
-    def load_image_if_path(input_data, flags=cv2.IMREAD_COLOR):
-        if isinstance(input_data, (str, Path)):
-            input_data = str(input_data)
-            img = cv2.imread(input_data, flags)
-            if img is None:
-                raise FileNotFoundError(f"Image not found at {input_data}")
-            return img
-        return input_data
-
     # 确保obj和mask是列表，以便统一处理多对象场景
     if not isinstance(obj, (list, tuple)):
         obj = [obj]
@@ -281,6 +343,9 @@ def load_pose_inference_source(image, depth_image, mask, obj, camera_k, cfg, mod
     depth_image = load_image_if_path(depth_image, flags=cv2.IMREAD_UNCHANGED)
     if depth_image is None or not isinstance(depth_image, np.ndarray):
         raise ValueError("Depth image is not a valid numpy array")
+    if depth_image.ndim == 3 and depth_image.shape[2] == 3:
+        # Convert the 3-channel image to a single channel
+        depth_image = depth_image[:, :, 0]
 
     # 相机内参处理
     camera_k = np.array(camera_k, dtype=np.float32).reshape(3, 3)
@@ -293,6 +358,8 @@ def load_pose_inference_source(image, depth_image, mask, obj, camera_k, cfg, mod
 
     # 深度归一化为米
     depth = depth_image.astype(np.float32) * cfg.DEPTH_SCALE / 1000.0
+
+    whole_pts = get_point_cloud_from_depth(depth, camera_k)
 
     # 定义transform
     transform = transforms.Compose([
@@ -322,18 +389,26 @@ def load_pose_inference_source(image, depth_image, mask, obj, camera_k, cfg, mod
 
         model_points = get_models(model_dir, o, cfg.N_SAMPLE_MODEL_POINT)
         if model_points is None:
-            # 若该物体无model_points，跳过或继续下一个
             continue
+        radius = np.max(np.linalg.norm(model_points, axis=1))
+
 
         # 获取mask的bbox
+        m = np.logical_and(m > 0, depth > 0)
         bbox = get_bbox(m > 0)
         y1, y2, x1, x2 = bbox
         sub_mask = m[y1:y2, x1:x2]
         choose = sub_mask.astype(np.float32).flatten().nonzero()[0]
 
         # 获取点云
-        pts = get_point_cloud_from_depth(depth, camera_k, [y1, y2, x1, x2])
-        pts = pts.reshape(-1, 3)[choose, :]
+        pts = whole_pts.copy()[y1:y2, x1:x2, :].reshape(-1, 3)[choose, :]
+        center = np.mean(pts, axis=0)
+        tmp_cloud = pts - center[None, :]
+        flag = np.linalg.norm(tmp_cloud, axis=1) < radius * 1.2
+        if np.sum(flag) < 4:
+            continue
+        choose = choose[flag]
+        pts = pts[flag]
 
         # 采样点
         if len(choose) < cfg.N_SAMPLE_OBSERVED_POINT:
@@ -361,9 +436,6 @@ def load_pose_inference_source(image, depth_image, mask, obj, camera_k, cfg, mod
         all_obj.append(torch.IntTensor([o]).long())
         whole_model_points.append(np.float64(model_points))
 
-
-    # 将所有结果堆叠为批次维度
-    # 假设至少检测到一个物体，否则all_pts为空，需要根据业务逻辑做异常处理
     if len(all_pts) == 0:
         return None
 
@@ -375,4 +447,4 @@ def load_pose_inference_source(image, depth_image, mask, obj, camera_k, cfg, mod
         'obj': torch.cat(all_obj, dim=0).long()  # obj本身是[1]的tensor，这里cat后是[batch]
     }
     whole_model_points = np.stack(whole_model_points, axis=0)
-    return ret_dict, whole_model_points
+    return ret_dict, image, whole_pts, whole_model_points

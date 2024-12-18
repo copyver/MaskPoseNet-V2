@@ -11,9 +11,9 @@ SOLVERS:
   CHECKPOINTS_DIR: 'checkpoints'
   METRIC_DIR: 'metrics'
   RESULTS_DIR: 'results'
+  EPOCHS: 20
   SAVE_EPOCH_FREQ: 1
   PRINT_FREQ: 1
-  EPOCHS: 2
   START_EPOCH: 0
   WARMUP_EPOCHS: 0
   NOMINAL_BATCH_SIZE: 64
@@ -81,7 +81,7 @@ POSE_MODEL:
 
 TRAIN_DATA:
   DATA_DIR: "/home/yhlever/DeepLearning/6D_object_pose_estimation/Datasets/HANDLE"
-  DATASET_DIR: "datasets_handle_100t5v"
+  DATASET_DIR: "datasets_handle_4000t_800v"
   TEMPLATE_DIR: "templates"
   NUM_IMG_PER_EPOCH: -1
   DEPTH_SCALE: 5.0
@@ -93,7 +93,7 @@ TRAIN_DATA:
   SHIFT_RANGE: 0.01
   RGB_MASK_FLAG: True
   DILATE_MASK: True
-  BATCH_SIZE: 4
+  BATCH_SIZE: 8
   NUM_WORKERS: 8
   SHUFFLE: True
   DROP_LAST: True
@@ -103,7 +103,7 @@ TRAIN_DATA:
 
 TEST_DATA:
   DATA_DIR: "/home/yhlever/DeepLearning/6D_object_pose_estimation/Datasets/HANDLE"
-  DATASET_DIR: "datasets_handle_100t5v"
+  DATASET_DIR: "datasets_handle_4000t_800v"
   TEMPLATE_DIR: "templates"
   MODEL_DIR: "models"
   DEPTH_SCALE: 5.0

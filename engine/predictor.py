@@ -3,6 +3,7 @@ from pathlib import Path
 
 import torch
 from utils import get_override_cfg
+import os
 
 
 class BasePredictor:
@@ -19,7 +20,7 @@ class BasePredictor:
         dataset (Dataset): Dataset used for prediction.
     """
 
-    def __init__(self, cfg=None, save_dir=None, verbose=False, _callbacks=None, **kwargs):
+    def __init__(self, cfg=None, save_dir: (Path, str) = None, verbose=False, _callbacks=None, **kwargs):
         """
         Initializes the BasePredictor class.
 
@@ -28,10 +29,11 @@ class BasePredictor:
         """
         self.cfg = get_override_cfg(cfg, **kwargs)
 
-        self.save_dir = save_dir or self.get_save_dir()
+        self.save_dir = Path(save_dir) or self.get_save_dir()
         self.done_warmup = False
         self.verbose = verbose
         self.seen = 0
+        self.cfg.TEST_DATA.TEMPLATE_DIR = os.path.join(cfg.TEST_DATA.DATA_DIR, cfg.TEST_DATA.TEMPLATE_DIR)
 
         # Usable if setup is done
         self.model = None
