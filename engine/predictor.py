@@ -2,7 +2,6 @@ import threading
 from pathlib import Path
 
 import torch
-from data.dataset.data_utils import load_pose_inference_source
 from utils import get_override_cfg
 
 
@@ -32,6 +31,7 @@ class BasePredictor:
         self.save_dir = save_dir or self.get_save_dir()
         self.done_warmup = False
         self.verbose = verbose
+        self.seen = 0
 
         # Usable if setup is done
         self.model = None
@@ -65,21 +65,13 @@ class BasePredictor:
         """Preprocesses the predictions."""
         raise NotImplementedError("postprocess function not implemented in validator")
 
-    def inference(self, im, *args, **kwargs):
+    def inference(self, batch):
         """Runs inference on a given image using the specified model and arguments."""
         raise NotImplementedError("inference function not implemented in validator")
 
     def setup_source(self, source):
         """Sets up source and inference mode."""
-        image, depth_image, seg_mask, obj, camera_k = source
-        self.dataset = load_pose_inference_source(
-            image=image,
-            depth_image=depth_image,
-            mask=seg_mask,
-            obj=obj,
-            camera_k=camera_k,
-            cfg=self.cfg,
-        )
+        raise NotImplementedError("setup_source function not implemented in validator")
 
     def stream_inference(self, source=None, model=None, *args, **kwargs):
         raise NotImplementedError("stream_inference function not implemented in trainer")
