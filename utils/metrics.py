@@ -1,6 +1,8 @@
-from utils import SimpleClass
-import numpy as np
 from pathlib import Path
+
+import numpy as np
+
+from utils import SimpleClass
 
 
 def compute_translation_error_np(pred_Ts, gt_Ts):
@@ -42,28 +44,22 @@ def compute_ADD_np(pred_Rs, pred_Ts, gt_Rs, gt_Ts, points):
     计算几何一致性 ADD 指标。
 
     Args:
-        pred_Rs (np.ndarray): 预测旋转矩阵，形状为 (-1, 9)。
-        pred_Ts (np.ndarray): 预测平移矩阵，形状为 (-1, 3)。
-        gt_Rs (np.ndarray): 真实旋转矩阵，形状为 (-1, 9)。
-        gt_Ts (np.ndarray): 真实平移矩阵，形状为 (-1, 3)。
-        points (np.ndarray): 物体点云，形状为 (n, 3)。
+        pred_Rs (np.ndarray): 预测旋转矩阵，形状为 (b, 9)。
+        pred_Ts (np.ndarray): 预测平移矩阵，形状为 (b, 3)。
+        gt_Rs (np.ndarray): 真实旋转矩阵，形状为 (b, 9)。
+        gt_Ts (np.ndarray): 真实平移矩阵，形状为 (b, 3)。
+        points (np.ndarray): 物体点云，形状为 (b, n, 3)。
 
     Returns:
         np.ndarray: ADD 指标，形状为 (-1,)。
     """
-    b = pred_Rs.shape[0]
-    n = points.shape[0]
-
     pred_Rs = pred_Rs.reshape(-1, 3, 3)  # 恢复为 (-1, 3, 3)
     gt_Rs = gt_Rs.reshape(-1, 3, 3)
 
-    # 扩展点云维度以与 batch 对齐
-    points = np.expand_dims(points, axis=0).repeat(b, axis=0)  # (b, n, 3)
-
     # 预测点云位姿变换
-    pred_points = np.matmul(points, pred_Rs.transpose(0, 2, 1)) + pred_Ts[:, np.newaxis, :]  # (b, n, 3)
+    pred_points = (points - pred_Ts[:, np.newaxis, :]) @ pred_Rs
     # 真实点云位姿变换
-    gt_points = np.matmul(points, gt_Rs.transpose(0, 2, 1)) + gt_Ts[:, np.newaxis, :]  # (b, n, 3)
+    gt_points = (points - gt_Ts[:, np.newaxis, :]) @ gt_Rs
 
     # 计算 L2 距离
     add_error = np.linalg.norm(pred_points - gt_points, axis=2).mean(axis=1)  # (b,)
@@ -354,7 +350,7 @@ class PoseMetrics(SimpleClass):
     @property
     def keys(self):
         """Returns a list of keys for accessing specific metrics."""
-        return ["metrics/translation_err", "metrics/rotation_err", "metrics/ADD_err", "metrics/pred_pose_score"]
+        return ["metrics/trans_err", "metrics/rot_err", "metrics/ADD_err", "metrics/score"]
 
     @property
     def mean_results(self):
@@ -363,6 +359,7 @@ class PoseMetrics(SimpleClass):
             return [0.0, 0.0, 0.0, 0.0]
         return [np.mean(self.pose.te), np.mean(self.pose.re), np.mean(self.pose.add), self.pred_pose_score]
 
+    @property
     def fitness(self):
         """Model fitness as a weighted combination of metrics."""
         return self.pose.fitness()
@@ -370,7 +367,4 @@ class PoseMetrics(SimpleClass):
     @property
     def results_dict(self):
         """Returns dictionary of computed performance metrics and statistics."""
-        return dict(zip(self.keys, self.mean_results))
-
-
-
+        return dict(zip(self.keys + ["metrics/fitness"], self.mean_results + [self.fitness]))

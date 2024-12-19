@@ -1,10 +1,9 @@
-import open3d as o3d
-import numpy as np
 import cv2
+import numpy as np
+import open3d as o3d
 
 
 def visualize_point_cloud(pt1, pt2=None):
-
     # 将 NumPy 数组转换为 Open3D 的 PointCloud 对象
     pcd1 = o3d.geometry.PointCloud()
     pcd1.points = o3d.utility.Vector3dVector(pt1)
@@ -27,17 +26,18 @@ def visualize_point_cloud(pt1, pt2=None):
     vis.run()
 
 
-def visualize_pose_bbox(results, save_path):
+def visualize_pose_bbox(results, save_dir):
     rgb = results['image']
-    pred_rot = results['pred_Rs']
-    pred_trans = results['pred_Ts']
-    model_points = results['whole_model_points']  # Todo:(b,1024,3), need to based on obj turns it to (1024, 3)
-    K = results['camera_k']
+    pred_rot = results['pred_Rs'].reshape((-1, 3, 3))
+    pred_trans = results['pred_Ts'].reshape((-1, 3))
+    model_points = results['whole_model_points']
+    K = results['camera_k'].reshape((3, 3))
 
     # draw_detections返回numpy数组格式的图像
     img = draw_detections(rgb, pred_rot, pred_trans, model_points, K, color=(255, 0, 0))
     img = np.uint8(img)  # 确保类型为uint8
 
+    save_path = save_dir / 'vis_pose_bbox.png'
     cv2.imwrite(save_path, img)
 
     prediction = cv2.imread(save_path, cv2.IMREAD_COLOR)
@@ -75,22 +75,22 @@ def get_3d_bbox(scale, shift=0):
     """
     if hasattr(scale, "__iter__"):
         bbox_3d = np.array([[scale[0] / 2, +scale[1] / 2, scale[2] / 2],
-                  [scale[0] / 2, +scale[1] / 2, -scale[2] / 2],
-                  [-scale[0] / 2, +scale[1] / 2, scale[2] / 2],
-                  [-scale[0] / 2, +scale[1] / 2, -scale[2] / 2],
-                  [+scale[0] / 2, -scale[1] / 2, scale[2] / 2],
-                  [+scale[0] / 2, -scale[1] / 2, -scale[2] / 2],
-                  [-scale[0] / 2, -scale[1] / 2, scale[2] / 2],
-                  [-scale[0] / 2, -scale[1] / 2, -scale[2] / 2]]) + shift
+                            [scale[0] / 2, +scale[1] / 2, -scale[2] / 2],
+                            [-scale[0] / 2, +scale[1] / 2, scale[2] / 2],
+                            [-scale[0] / 2, +scale[1] / 2, -scale[2] / 2],
+                            [+scale[0] / 2, -scale[1] / 2, scale[2] / 2],
+                            [+scale[0] / 2, -scale[1] / 2, -scale[2] / 2],
+                            [-scale[0] / 2, -scale[1] / 2, scale[2] / 2],
+                            [-scale[0] / 2, -scale[1] / 2, -scale[2] / 2]]) + shift
     else:
         bbox_3d = np.array([[scale / 2, +scale / 2, scale / 2],
-                  [scale / 2, +scale / 2, -scale / 2],
-                  [-scale / 2, +scale / 2, scale / 2],
-                  [-scale / 2, +scale / 2, -scale / 2],
-                  [+scale / 2, -scale / 2, scale / 2],
-                  [+scale / 2, -scale / 2, -scale / 2],
-                  [-scale / 2, -scale / 2, scale / 2],
-                  [-scale / 2, -scale / 2, -scale / 2]]) +shift
+                            [scale / 2, +scale / 2, -scale / 2],
+                            [-scale / 2, +scale / 2, scale / 2],
+                            [-scale / 2, +scale / 2, -scale / 2],
+                            [+scale / 2, -scale / 2, scale / 2],
+                            [+scale / 2, -scale / 2, -scale / 2],
+                            [-scale / 2, -scale / 2, scale / 2],
+                            [-scale / 2, -scale / 2, -scale / 2]]) + shift
 
     bbox_3d = bbox_3d.transpose()
     return bbox_3d
@@ -101,16 +101,16 @@ def draw_3d_bbox(img, imgpts, color, size=3):
 
     # draw ground layer in darker color
     color_ground = (int(color[0] * 0.3), int(color[1] * 0.3), int(color[2] * 0.3))
-    for i, j in zip([4, 5, 6, 7],[5, 7, 4, 6]):
+    for i, j in zip([4, 5, 6, 7], [5, 7, 4, 6]):
         img = cv2.line(img, tuple(imgpts[i]), tuple(imgpts[j]), color_ground, size)
 
     # draw pillars in blue color
-    color_pillar = (int(color[0]*0.6), int(color[1]*0.6), int(color[2]*0.6))
-    for i, j in zip(range(4),range(4,8)):
+    color_pillar = (int(color[0] * 0.6), int(color[1] * 0.6), int(color[2] * 0.6))
+    for i, j in zip(range(4), range(4, 8)):
         img = cv2.line(img, tuple(imgpts[i]), tuple(imgpts[j]), color_pillar, size)
 
     # finally, draw top layer in color
-    for i, j in zip([0, 1, 2, 3],[1, 3, 0, 2]):
+    for i, j in zip([0, 1, 2, 3], [1, 3, 0, 2]):
         img = cv2.line(img, tuple(imgpts[i]), tuple(imgpts[j]), color, size)
     return img
 
@@ -125,23 +125,31 @@ def draw_3d_pts(img, imgpts, color, size=1):
 def draw_detections(image, pred_rots, pred_trans, model_points, intrinsics, color=(255, 0, 0)):
     num_pred_instances = len(pred_rots)
     draw_image_bbox = image.copy()
-    # 3d bbox
-    scale = (np.max(model_points, axis=0) - np.min(model_points, axis=0))
-    shift = np.mean(model_points, axis=0)
-    bbox_3d = get_3d_bbox(scale, shift)
-
-    # 3d point
-    choose = np.random.choice(np.arange(len(model_points)), 512)
-    pts_3d = model_points[choose].T
+    # # 3d bbox
+    # scale = (np.max(model_points, axis=0) - np.min(model_points, axis=0))
+    # shift = np.mean(model_points, axis=0)
+    # bbox_3d = get_3d_bbox(scale, shift)
+    #
+    # # 3d point
+    # choose = np.random.choice(np.arange(len(model_points)), 512)
+    # pts_3d = model_points[choose].T
 
     for ind in range(num_pred_instances):
+        # 3d bbox
+        scale = (np.max(model_points[ind], axis=0) - np.min(model_points[ind], axis=0))
+        shift = np.mean(model_points[ind], axis=0)
+        bbox_3d = get_3d_bbox(scale, shift)
+
+        # 3d point
+        choose = np.random.choice(np.arange(len(model_points[ind])), 512)
+        pts_3d = model_points[ind][choose].T
         # draw 3d bounding box
-        transformed_bbox_3d = pred_rots[ind]@bbox_3d + pred_trans[ind][:,np.newaxis]
-        projected_bbox = calculate_2d_projections(transformed_bbox_3d, intrinsics[ind])
+        transformed_bbox_3d = pred_rots[ind] @ bbox_3d + pred_trans[ind][:, np.newaxis]
+        projected_bbox = calculate_2d_projections(transformed_bbox_3d, intrinsics)
         draw_image_bbox = draw_3d_bbox(draw_image_bbox, projected_bbox, color)
         # draw point cloud
-        transformed_pts_3d = pred_rots[ind]@pts_3d + pred_trans[ind][:,np.newaxis]
-        projected_pts = calculate_2d_projections(transformed_pts_3d, intrinsics[ind])
+        transformed_pts_3d = pred_rots[ind] @ pts_3d + pred_trans[ind][:, np.newaxis]
+        projected_pts = calculate_2d_projections(transformed_pts_3d, intrinsics)
         draw_image_bbox = draw_3d_pts(draw_image_bbox, projected_pts, color)
 
     return draw_image_bbox

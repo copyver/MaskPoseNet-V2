@@ -1,5 +1,6 @@
 import json
 
+import numpy as np
 import torch
 from loguru import logger
 from tqdm import tqdm
@@ -71,7 +72,7 @@ class PoseValidator(BaseValidator):
         )
         bar = tqdm(self.dataloader, desc=self.get_desc(), total=len(self.dataloader))
         self.init_metrics(de_parallel(model))
-        self.jdict = []  # empty before each val
+        self.jdict = []
         for batch_i, batch in enumerate(bar):
             self.run_callbacks("on_val_batch_start")
             # Preprocess
@@ -159,14 +160,76 @@ class PoseValidator(BaseValidator):
         self.metrics.names = self.names
         self.metrics.plot = self.cfg.SOLVERS.PLOTS
         self.jdict = []
-        self.stats = dict(tp=[], conf=[], pred_cls=[], target_cls=[], target_img=[])
+        self.stats = dict(te=[], re=[], add=[], score=[], fitness=[])
 
     def update_metrics(self, preds, batch):
-        pass
+        """
+        使用模型预测结果和对应的ground-truth更新指标统计。
+        Args:
+            preds (dict): 模型预测结果, 示例:
+                preds = {
+                    'pred_Rs': np.array([...])  # shape (n, 9) 或 (n,3,3)
+                    'pred_Ts': np.array([...])  # shape (n,3)
+                    'pred_scores': np.array([...]) # shape (n,)
+                }
+            batch (dict): batch中包含的GT标注值, 示例:
+                batch = {
+                    'translation_label': Tensor, shape (n,3)
+                    'rotation_label': Tensor, shape (n,3,3)
+                }
+        """
+        pred_Rs = np.array(preds['pred_Rs'])
+        pred_Ts = np.array(preds['pred_Ts'])
+        pose_scores = np.array(preds['pred_scores'])
 
+        gt_Ts = batch['translation_label'].cpu().numpy()
+        gt_Rs = batch['rotation_label'].cpu().numpy()
+        # 如果gt_Rs是3x3，需要展平成9维的向量，或者在compute_xxx中支持3x3输入
+        if gt_Rs.ndim == 3:
+            gt_Rs = gt_Rs.reshape(gt_Rs.shape[0], -1)
 
+        if pred_Rs.ndim == 3:
+            pred_Rs = pred_Rs.reshape(pred_Rs.shape[0], -1)
 
+        points = batch['pts'].cpu().numpy()
 
+        # 使用pose进行更新
+        self.metrics.process(pred_Rs, pred_Ts, gt_Rs, gt_Ts, points, pose_scores)
 
+    def get_stats(self):
+        """
+        从当前的pose评估数据中获取统计结果并更新self.stats字典，然后返回该字典。
+        """
+        means = self.metrics.mean_results  # [mean_te, mean_re, mean_add, mean_ps]
+        fitness = self.metrics.fitness
+        self.stats['te'] = means[0]
+        self.stats['re'] = means[1]
+        self.stats['add'] = means[2]
+        self.stats['score'] = means[3]
+        self.stats['fitness'] = fitness
+        return self.stats
 
-
+    def print_results(self):
+        """
+        self.metrics.result_dict包括:
+        {
+          'fitness': np.float32(...),
+          'metrics/ADD_err': np.float32(...),
+          'metrics/pred_pose_score': np.float32(...),
+          'metrics/rotation_err': np.float32(...),
+          'metrics/translation_err': np.float32(...)
+        }
+        """
+        results = self.metrics.results_dict
+        logger.info(
+            "\n" +
+            ("%20s" * len(results.keys()) + "%11s") % (
+                *results.keys(),
+                "BATCH",
+            ) +
+            "\n" +
+            colorstr("blue", ("%20.4g" * len(results.keys()) + "%11.4g") % (
+                *results.values(),
+                self.cfg.TEST_DATA.BATCH_SIZE,
+            ))
+        )

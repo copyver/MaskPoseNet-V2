@@ -42,12 +42,12 @@ if __name__ == "__main__":
 """
     (USER_CONFIG_DIR / "DDP").mkdir(exist_ok=True)
     with tempfile.NamedTemporaryFile(
-        prefix="_temp_",
-        suffix=f"{id(trainer)}.py",
-        mode="w+",
-        encoding="utf-8",
-        dir=USER_CONFIG_DIR / "DDP",
-        delete=False,
+            prefix="_temp_",
+            suffix=f"{id(trainer)}.py",
+            mode="w+",
+            encoding="utf-8",
+            dir=USER_CONFIG_DIR / "DDP",
+            delete=False,
     ) as file:
         file.write(content)
     return file.name

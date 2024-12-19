@@ -1,9 +1,10 @@
+import os
 import threading
 from pathlib import Path
 
 import torch
+
 from utils import get_override_cfg
-import os
 
 
 class BasePredictor:
@@ -29,7 +30,7 @@ class BasePredictor:
         """
         self.cfg = get_override_cfg(cfg, **kwargs)
 
-        self.save_dir = Path(save_dir) or self.get_save_dir()
+        self.save_dir = self.get_save_dir(save_dir)
         self.done_warmup = False
         self.verbose = verbose
         self.seen = 0
@@ -52,7 +53,9 @@ class BasePredictor:
         else:
             return list(self.stream_inference(source, model, *args, **kwargs))  # merge list of Result into one
 
-    def get_save_dir(self):
+    def get_save_dir(self, save_dir=None):
+        if save_dir is not None:
+            return Path(save_dir)
         output_dir = Path(self.cfg.SOLVERS.OUTPUT_DIR)
         return output_dir / self.cfg.SOLVERS.LOGS_NAME / self.cfg.SOLVERS.RESULTS_DIR
 

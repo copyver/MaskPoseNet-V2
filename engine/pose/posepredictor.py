@@ -1,23 +1,20 @@
-from pathlib import Path
-
-import cv2
 import torch
 from loguru import logger
 
+from data.dataset.data_utils import load_pose_inference_source, get_all_templates
 from engine import BasePredictor
+from nn.autobackend import AutoBackend
 from utils import colorstr
 from utils.ops import Profile
-from utils.torch_utils import smart_inference_mode
-from nn.autobackend import AutoBackend
 from utils.torch_utils import (
     select_device,
 )
+from utils.torch_utils import smart_inference_mode
 from utils.visualize import visualize_pose_bbox
-from data.dataset.data_utils import load_pose_inference_source, get_all_templates
 
 
 class PosePredictor(BasePredictor):
-    def __init__(self, cfg=None, save_dir=None, verbose=False,  _callbacks=None, **kwargs):
+    def __init__(self, cfg=None, save_dir=None, verbose=False, _callbacks=None, **kwargs):
         super(PosePredictor, self).__init__(cfg, save_dir, verbose, _callbacks, **kwargs)
 
     def setup_source(self, source):
@@ -29,7 +26,7 @@ class PosePredictor(BasePredictor):
             source["obj"],
             source["camera_k"]
         )
-        self.dataset, image, whole_pts, whole_model_points = load_pose_inference_source(
+        self.dataset, image, depth_image, mask, whole_model_points = load_pose_inference_source(
             image=image,
             depth_image=depth_image,
             mask=seg_mask,
@@ -37,16 +34,14 @@ class PosePredictor(BasePredictor):
             camera_k=camera_k,
             cfg=self.cfg.TEST_DATA,
         )
-        source['whole_pts'] = whole_pts
         source['image'] = image
+        source['depth_image'] = depth_image
+        source['seg_mask'] = mask
         source['whole_model_points'] = whole_model_points
 
     @smart_inference_mode()
     def stream_inference(self, source=None, model=None, *args, **kwargs):
         """Streams real-time inference on camera feed and saves results to file."""
-        if self.verbose:
-            logger.info("")
-
         # Setup model
         if not self.model:
             self.setup_model(model)
@@ -98,29 +93,30 @@ class PosePredictor(BasePredictor):
             self.run_callbacks("on_predict_postprocess_end")
             # Visualize, save, write results
 
-            self.seen += 1
-            n = batch['pts'].size(0)
+            self.seen = batch['pts'].size(0)
             self.results.update({"speed": {
-                "preprocess": profilers[0].dt * 1e3 / n,
-                "inference": profilers[1].dt * 1e3 / n,
-                "postprocess": profilers[2].dt * 1e3 / n,
+                "preprocess": profilers[0].dt * 1e3 / self.seen,
+                "inference": profilers[1].dt * 1e3 / self.seen,
+                "postprocess": profilers[2].dt * 1e3 / self.seen,
             }})
 
             # Print batch results
             if self.verbose:
                 logger.info("\n")
-
+            yield from self.results.items()
             self.run_callbacks("on_predict_batch_end")
 
         # Print final results
         if self.verbose and self.seen:
+            all_t = sum(x.t * 1e3 for x in profilers)
+            logger.info(f"Total {self.seen} inst, Total resume {all_t:.3f}ms")
             t = tuple(x.t / self.seen * 1e3 for x in profilers)  # speeds per image
             logger.info(
-                f"Speed: %.1fms preprocess, %.1fms inference, %.1fms postprocess per image at shape " % t
+                f"Speed: %.3fms preprocess, %.3fms inference, %.3fms postprocess per inst at shape " % t
             )
         if self.save_dir is not None:
             visualize_pose_bbox(self.results, self.save_dir)
-            logger.info(f"Results saved to {colorstr('bold', self.save_dir)}")
+            logger.info(f"Results saved to {colorstr('red', self.save_dir)}")
         self.run_callbacks("on_predict_end")
 
     def preprocess(self, batch):

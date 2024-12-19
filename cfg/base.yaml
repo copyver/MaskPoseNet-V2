@@ -6,12 +6,12 @@ SOLVERS:
   USE_DDP: False
   SEED: 42
   OUTPUT_DIR: './middle_log'
-  LOGS_NAME: '1217_train'
+  LOGS_NAME: '1219_train'
   TENSORBOARD_LOGS_DIR: 'logs'
   CHECKPOINTS_DIR: 'checkpoints'
   METRIC_DIR: 'metrics'
   RESULTS_DIR: 'results'
-  EPOCHS: 20
+  EPOCHS: 5
   SAVE_EPOCH_FREQ: 1
   PRINT_FREQ: 1
   START_EPOCH: 0
@@ -81,7 +81,7 @@ POSE_MODEL:
 
 TRAIN_DATA:
   DATA_DIR: "/home/yhlever/DeepLearning/6D_object_pose_estimation/Datasets/HANDLE"
-  DATASET_DIR: "datasets_handle_4000t_800v"
+  DATASET_DIR: "datasets_handle_100t5v"
   TEMPLATE_DIR: "templates"
   NUM_IMG_PER_EPOCH: -1
   DEPTH_SCALE: 5.0
@@ -103,7 +103,7 @@ TRAIN_DATA:
 
 TEST_DATA:
   DATA_DIR: "/home/yhlever/DeepLearning/6D_object_pose_estimation/Datasets/HANDLE"
-  DATASET_DIR: "datasets_handle_4000t_800v"
+  DATASET_DIR: "datasets_handle_100t5v"
   TEMPLATE_DIR: "templates"
   MODEL_DIR: "models"
   DEPTH_SCALE: 5.0

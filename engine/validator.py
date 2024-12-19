@@ -28,6 +28,8 @@ class BaseValidator(object):
         self.save_dir = save_dir
         self.save_dir.mkdir(parents=True, exist_ok=True)
         self.plots = {}
+        self.jdict = []
+        self.stats = None
         self.callbacks = _callbacks
 
     def __call__(self, trainer=None, model=None):
@@ -60,22 +62,13 @@ class BaseValidator(object):
         """Updates metrics based on predictions and batch."""
         raise NotImplementedError("update_metrics function not implemented in validator")
 
-    def add_callback(self, event: str, callback):
-        """Appends the given callback."""
-        self.callbacks[event].append(callback)
-
-    def run_callbacks(self, event: str):
-        """Runs all callbacks associated with a specified event."""
-        for callback in self.callbacks.get(event, []):
-            callback(self)
-
     def finalize_metrics(self, *args, **kwargs):
         """Finalizes and returns all metrics."""
         pass
 
     def get_stats(self):
         """Returns statistics about the model's performance."""
-        return {}
+        raise NotImplementedError("get_stats function not implemented in validator")
 
     def check_stats(self, stats):
         """Checks statistics."""
@@ -114,3 +107,12 @@ class BaseValidator(object):
     def eval_json(self, stats):
         """Evaluate and return JSON format of prediction statistics."""
         pass
+
+    def add_callback(self, event: str, callback):
+        """Appends the given callback."""
+        self.callbacks[event].append(callback)
+
+    def run_callbacks(self, event: str):
+        """Runs all callbacks associated with a specified event."""
+        for callback in self.callbacks.get(event, []):
+            callback(self)

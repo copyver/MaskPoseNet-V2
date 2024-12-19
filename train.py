@@ -1,5 +1,4 @@
 from engine.model import Model
-from loguru import logger
 
 
 def main():

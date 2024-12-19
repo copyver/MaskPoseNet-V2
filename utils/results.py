@@ -1,5 +1,6 @@
-from utils import SimpleClass
 from pathlib import Path
+
+from utils import SimpleClass
 
 
 class Results(SimpleClass):
@@ -14,7 +15,7 @@ class Results(SimpleClass):
     """
 
     def __init__(
-        self, orig_img, path, names, speed=None
+            self, orig_img, path, names, speed=None
     ) -> None:
         """
         Initialize the Results class for storing and manipulating inference results.
@@ -190,7 +191,6 @@ class Results(SimpleClass):
         """
         return Results(orig_img=self.orig_img, path=self.path, names=self.names, speed=self.speed)
 
-
     def show(self, *args, **kwargs):
         """
         Display the image with annotated inference results.
@@ -235,5 +235,3 @@ class Results(SimpleClass):
             filename = f"results_{Path(self.path).name}"
         self.plot(save=True, filename=filename, *args, **kwargs)
         return filename
-
-

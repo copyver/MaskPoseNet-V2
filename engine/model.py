@@ -1,19 +1,20 @@
 import inspect
 from pathlib import Path
-from typing import Union
+from typing import Dict, List, Union
+
 import numpy as np
-import torch.nn as nn
 import torch
+import torch.nn as nn
+from easydict import EasyDict as edict
+from loguru import logger
+
 from engine import PoseTrainer, PosePredictor, PoseValidator, SegTrainer, SegPredictor, SegValidator
 from models import PoseModel, SegModel
 from nn.tasks import attempt_load_one_weight
 from utils import yaml_model_load, RANK
 from utils.callback import DefaultCallbacks
-from utils.torch_utils import print_model_summary
-from typing import Dict, List, Union
 from utils.results import Results
-from loguru import logger
-from easydict import EasyDict as edict
+from utils.torch_utils import print_model_summary
 
 
 class Model(nn.Module):
@@ -88,7 +89,7 @@ class Model(nn.Module):
             self.task = task or self.model.task
             self.ckpt_path = self.model.pt_path
             self.cfg = edict(self.ckpt['train_args'])
-            print(self.ckpt['train_args'].keys())
+            logger.info(self.ckpt['train_args'].keys())
         else:
             raise ValueError(f"Unsupported weights file '{weights}'")
         self.model_name = weights
@@ -100,7 +101,8 @@ class Model(nn.Module):
         if self.cfg.get("RESUME"):
             self.cfg.RESUME = self.ckpt_path
 
-        self.trainer = (trainer or self._smart_load("trainer"))(cfg=self.cfg, model=self.model, callbacks=DefaultCallbacks)
+        self.trainer = (trainer or self._smart_load("trainer"))(cfg=self.cfg, model=self.model,
+                                                                callbacks=DefaultCallbacks)
         self.trainer.train()
         # Update model and cfg after training
         if RANK in {-1, 0}:
@@ -110,11 +112,11 @@ class Model(nn.Module):
         return self.metrics
 
     def predict(
-        self,
-        source: Dict = None,
-        stream: bool = False,
-        predictor=None,
-        **kwargs,
+            self,
+            source: Dict = None,
+            stream: bool = False,
+            predictor=None,
+            **kwargs,
     ) -> List[Results]:
         """
         Performs predictions on the given image source using the YOLO model.
@@ -152,8 +154,8 @@ class Model(nn.Module):
 
         if not self.predictor:
             self.predictor = (predictor or self._smart_load("predictor"))(cfg=self.cfg,
-                                                                          save_dir=self.cfg.SOLVERS.RESULTS_DIR,
-                                                                          _callbacks=DefaultCallbacks)
+                                                                          _callbacks=DefaultCallbacks,
+                                                                          verbose=True)
             self.predictor.setup_model(model=self.model)
 
         return self.predictor(source=source, stream=stream)
@@ -200,7 +202,7 @@ class Model(nn.Module):
             name = self.__class__.__name__
             mode = inspect.stack()[1][3]  # get the function name.
             raise NotImplementedError(
-                print(f"WARNING '{name}' model does not support '{mode}' mode for '{self.task}' task yet.")
+                f"WARNING '{name}' model does not support '{mode}' mode for '{self.task}' task yet."
             ) from e
 
     @property

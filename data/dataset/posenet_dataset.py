@@ -5,9 +5,10 @@ import cv2
 import numpy as np
 import torch
 import torchvision.transforms as transforms
+import trimesh
 from albumentations.core.transforms_interface import ImageOnlyTransform
 from loguru import logger
-import trimesh
+
 from data.dataset.base_dataset import DatasetBase
 from data.dataset.data_utils import (
     convert_blender_to_pyrender,
@@ -387,6 +388,7 @@ if __name__ == "__main__":
         cfg_dict = yaml.safe_load(f)
     cfg = edict(cfg_dict)
 
+
     # 测试代码
     def test_posenet_dataset():
         print("开始测试PoseNetDataset加载...")
@@ -430,6 +432,7 @@ if __name__ == "__main__":
 
             break
 
+
     def test_point_cloud():
         from utils.visualize import visualize_point_cloud
         train_dataset = PoseNetDataset(cfg.TRAIN_DATA, is_train=True)
@@ -456,6 +459,7 @@ if __name__ == "__main__":
             # 合并 tem1_pts 和 tem2_pts
             tem_pts = np.concatenate([tem1_pts, tem2_pts], axis=0)
             visualize_point_cloud(target_pts, tem_pts)
+
 
     test_point_cloud()
     # test_posenet_dataset()

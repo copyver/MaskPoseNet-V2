@@ -1,6 +1,5 @@
-import torch
-from models.pose.posemodel import PoseModel
-from easydict import EasyDict as edict
+import numpy as np
+
 from engine.model import Model
 
 # 加载模型文件
@@ -18,7 +17,7 @@ from engine.model import Model
 # model.eval()
 
 model = Model(
-    model="middle_log/1217_train/checkpoints/last.pt",
+    model="middle_log/1219_train/checkpoints/last.pt",
     task='pose',
     verbose=False
 )
@@ -27,13 +26,43 @@ source = {
              "datasets_handle_1000test/images/color_ims/image_000000.png",
     "depth_image": "/home/yhlever/DeepLearning/6D_object_pose_estimation/Datasets/HANDLE/"
                    "datasets_handle_1000test/images/depth_ims/image_000000.png",
-    "seg_mask": "/home/yhlever/DeepLearning/6D_object_pose_estimation/Datasets/HANDLE/"
-                "datasets_handle_1000test/images/modal_masks/image_000000/channel_012.png",
-    "obj": [1],
-    "camera_k": [
+    "seg_mask": ["/home/yhlever/DeepLearning/6D_object_pose_estimation/Datasets/HANDLE/"
+                 "datasets_handle_1000test/images/modal_masks/image_000000/channel_000.png",
+                 "/home/yhlever/DeepLearning/6D_object_pose_estimation/Datasets/HANDLE/"
+                 "datasets_handle_1000test/images/modal_masks/image_000000/channel_001.png",
+                 "/home/yhlever/DeepLearning/6D_object_pose_estimation/Datasets/HANDLE/"
+                 "datasets_handle_1000test/images/modal_masks/image_000000/channel_002.png",
+                 "/home/yhlever/DeepLearning/6D_object_pose_estimation/Datasets/HANDLE/"
+                 "datasets_handle_1000test/images/modal_masks/image_000000/channel_003.png",
+                 "/home/yhlever/DeepLearning/6D_object_pose_estimation/Datasets/HANDLE/"
+                 "datasets_handle_1000test/images/modal_masks/image_000000/channel_004.png",
+                 "/home/yhlever/DeepLearning/6D_object_pose_estimation/Datasets/HANDLE/"
+                 "datasets_handle_1000test/images/modal_masks/image_000000/channel_005.png",
+                 "/home/yhlever/DeepLearning/6D_object_pose_estimation/Datasets/HANDLE/"
+                 "datasets_handle_1000test/images/modal_masks/image_000000/channel_006.png",
+                 "/home/yhlever/DeepLearning/6D_object_pose_estimation/Datasets/HANDLE/"
+                 "datasets_handle_1000test/images/modal_masks/image_000000/channel_007.png",
+                 "/home/yhlever/DeepLearning/6D_object_pose_estimation/Datasets/HANDLE/"
+                 "datasets_handle_1000test/images/modal_masks/image_000000/channel_008.png",
+                 "/home/yhlever/DeepLearning/6D_object_pose_estimation/Datasets/HANDLE/"
+                 "datasets_handle_1000test/images/modal_masks/image_000000/channel_009.png",
+                 "/home/yhlever/DeepLearning/6D_object_pose_estimation/Datasets/HANDLE/"
+                 "datasets_handle_1000test/images/modal_masks/image_000000/channel_010.png",
+                 "/home/yhlever/DeepLearning/6D_object_pose_estimation/Datasets/HANDLE/"
+                 "datasets_handle_1000test/images/modal_masks/image_000000/channel_011.png",
+                 "/home/yhlever/DeepLearning/6D_object_pose_estimation/Datasets/HANDLE/"
+                 "datasets_handle_1000test/images/modal_masks/image_000000/channel_012.png",
+                 "/home/yhlever/DeepLearning/6D_object_pose_estimation/Datasets/HANDLE/"
+                 "datasets_handle_1000test/images/modal_masks/image_000000/channel_013.png",
+                 "/home/yhlever/DeepLearning/6D_object_pose_estimation/Datasets/HANDLE/"
+                 "datasets_handle_1000test/images/modal_masks/image_000000/channel_014.png",
+                 ],
+    "obj": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ],
+    "camera_k": np.array([
         [1056.3635127452394, 0.0, 640.3173115306723, ],
         [0.0, 1056.3635127452394, 479.3086393011287, ],
         [0.0, 0.0, 1.0],
-    ],
+    ], dtype=np.float64),
 }
-model.predict(source)
+result = model.predict(source)
+print("Successful Inference")

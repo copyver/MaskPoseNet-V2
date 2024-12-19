@@ -1,10 +1,11 @@
-from datetime import datetime
+import gc
 import math
 import os
 import time
 from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
-import gc
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -12,6 +13,7 @@ from loguru import logger
 from torch import distributed as dist
 from torch import optim
 from tqdm import tqdm
+
 from nn.tasks import attempt_load_one_weight
 from utils import colorstr, RANK, LOCAL_RANK
 from utils import yaml_print, yaml_save, logger_format_function
@@ -19,7 +21,6 @@ from utils.log_utils import TensorBoardWriter
 from utils.torch_utils import (
     select_device,
     init_seeds,
-    torch_distributed_zero_first,
     one_cycle,
     autocast,
     EarlyStopping,
@@ -83,9 +84,11 @@ class BaseTrainer:
 
     def train(self):
         """Allow device='', device=None on Multi-GPU systems to default to device=0."""
-        if isinstance(self.cfg.SOLVERS.DEVICE, str) and len(self.cfg.SOLVERS.DEVICE):  # i.e. device='0' or device='0,1,2,3'
+        if isinstance(self.cfg.SOLVERS.DEVICE, str) and len(
+                self.cfg.SOLVERS.DEVICE):  # i.e. device='0' or device='0,1,2,3'
             world_size = len(self.cfg.SOLVERS.DEVICE.split(","))
-        elif isinstance(self.cfg.SOLVERS.DEVICE, (tuple, list)):  # i.e. device=[0, 1, 2, 3] (multi-GPU from CLI is list)
+        elif isinstance(self.cfg.SOLVERS.DEVICE,
+                        (tuple, list)):  # i.e. device=[0, 1, 2, 3] (multi-GPU from CLI is list)
             world_size = len(self.cfg.SOLVERS.DEVICE)
         elif self.cfg.SOLVERS.DEVICE in {"cpu", "mps"}:  # i.e. device='cpu' or 'mps'
             world_size = 0
@@ -132,7 +135,7 @@ class BaseTrainer:
             pbar = enumerate(self.train_loader)
 
             if RANK in {-1, 0}:
-                logger.info(self.progress_string())   # Todo: add function
+                logger.info(self.progress_string())  # Todo: add function
                 pbar = tqdm(enumerate(self.train_loader), total=nb)
 
             self.tloss = None
@@ -406,7 +409,6 @@ class BaseTrainer:
             torch.amp.GradScaler("cuda", enabled=self.amp) if TORCH_2_4 else torch.cuda.amp.GradScaler(enabled=self.amp)
         )
 
-
         # Check imgsz  Todo: add img size check
 
         # Dataloaders
@@ -552,7 +554,8 @@ class BaseTrainer:
         if self.cfg.LR_SCHEDULER.TYPE == 'cosine':
             self.lf = one_cycle(1, self.cfg.LR_SCHEDULER.LRF, self.epochs)  # cosine 1->hyp['lrf']
         else:
-            self.lf = lambda x: max(1 - x / self.epochs, 0) * (1.0 - self.cfg.LR_SCHEDULER.LRF) + self.cfg.LR_SCHEDULER.LRF  # linear
+            self.lf = lambda x: max(1 - x / self.epochs, 0) * (
+                        1.0 - self.cfg.LR_SCHEDULER.LRF) + self.cfg.LR_SCHEDULER.LRF  # linear
         self.scheduler = optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=self.lf)
 
     def get_dataset(self, rank=0, is_train=True):
@@ -593,4 +596,3 @@ class BaseTrainer:
             return
         else:
             torch.cuda.empty_cache()
-

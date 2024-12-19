@@ -1,14 +1,15 @@
 import json
 import os
 import time
-import trimesh
+from pathlib import Path
+
 import cv2
 import numpy as np
+import torch
+import torchvision.transforms as transforms
+import trimesh
 from loguru import logger
 from pycocotools import mask as mask_utils
-import torchvision.transforms as transforms
-import torch
-from pathlib import Path
 
 """
 Helper functions for loading data.
@@ -392,7 +393,6 @@ def load_pose_inference_source(image, depth_image, mask, obj, camera_k, cfg, mod
             continue
         radius = np.max(np.linalg.norm(model_points, axis=1))
 
-
         # 获取mask的bbox
         m = np.logical_and(m > 0, depth > 0)
         bbox = get_bbox(m > 0)
@@ -447,4 +447,4 @@ def load_pose_inference_source(image, depth_image, mask, obj, camera_k, cfg, mod
         'obj': torch.cat(all_obj, dim=0).long()  # obj本身是[1]的tensor，这里cat后是[batch]
     }
     whole_model_points = np.stack(whole_model_points, axis=0)
-    return ret_dict, image, whole_pts, whole_model_points
+    return ret_dict, image, depth_image, mask, whole_model_points
