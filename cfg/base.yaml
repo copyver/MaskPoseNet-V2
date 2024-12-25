@@ -6,7 +6,7 @@ SOLVERS:
   USE_DDP: False
   SEED: 42
   OUTPUT_DIR: './middle_log'
-  LOGS_NAME: '1219_train'
+  LOGS_NAME: '1223_train'
   TENSORBOARD_LOGS_DIR: 'logs'
   CHECKPOINTS_DIR: 'checkpoints'
   METRIC_DIR: 'metrics'
@@ -121,3 +121,14 @@ TEST_DATA:
   DROP_LAST: False
   PIN_MEMORY: False
   WORKERS: 1
+
+EXPORT:
+  EXPORT_DIR: "./export"
+  FORMAT: "torchscript"
+  DEVICE: 'cuda:0'
+  OPTIMIZE: False
+  HALF: True
+  INT8: False
+  DYNAMIC: True
+  SIMPLIFY: True
+

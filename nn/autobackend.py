@@ -3,6 +3,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 from loguru import logger
+from collections import OrderedDict, namedtuple
+import json
 
 
 class AutoBackend(nn.Module):
@@ -48,20 +50,10 @@ class AutoBackend(nn.Module):
             pt,
             jit,
             onnx,
-            xml,
             engine,
-            coreml,
-            saved_model,
-            pb,
-            tflite,
-            edgetpu,
-            tfjs,
-            paddle,
-            mnn,
-            ncnn,
             triton,
         ) = self._model_type(w)
-        fp16 &= pt or jit or onnx or xml or engine or nn_module or triton  # FP16
+        fp16 &= pt or jit or onnx or engine or nn_module or triton  # FP16
         model, metadata, task = None, None, None
 
         # Set device
@@ -80,7 +72,7 @@ class AutoBackend(nn.Module):
 
         # PyTorch
         elif pt:
-            from ultralytics.nn.tasks import attempt_load_weights
+            from nn.tasks import attempt_load_weights
 
             model = attempt_load_weights(
                 weights if isinstance(weights, list) else w, device=device, inplace=True, fuse=False
@@ -119,6 +111,70 @@ class AutoBackend(nn.Module):
                         buffer_ptr=y_tensor.data_ptr(),
                     )
                     bindings.append(y_tensor)
+
+                    # TensorRT
+        elif engine:
+            logger.info(f"Loading {w} for TensorRT inference...")
+            import tensorrt as trt  # noqa https://developer.nvidia.com/nvidia-tensorrt-download
+
+
+            if device.type == "cpu":
+                device = torch.device("cuda:0")
+            Binding = namedtuple("Binding", ("name", "dtype", "shape", "data", "ptr"))
+            logger = trt.Logger(trt.Logger.INFO)
+            # Read file
+            with open(w, "rb") as f, trt.Runtime(logger) as runtime:
+                try:
+                    meta_len = int.from_bytes(f.read(4), byteorder="little")  # read metadata length
+                    metadata = json.loads(f.read(meta_len).decode("utf-8"))  # read metadata
+                except UnicodeDecodeError:
+                    f.seek(0)  # engine file may lack embedded Ultralytics metadata
+                model = runtime.deserialize_cuda_engine(f.read())  # read engine
+
+            # Model context
+            try:
+                context = model.create_execution_context()
+            except Exception as e:  # model is None
+                logger.error(f"ERROR: TensorRT model exported with a different version than {trt.__version__}\n")
+                raise e
+
+            bindings = OrderedDict()
+            output_names = []
+            fp16 = False  # default updated below
+            dynamic = False
+            is_trt10 = not hasattr(model, "num_bindings")
+            num = range(model.num_io_tensors) if is_trt10 else range(model.num_bindings)
+            for i in num:
+                if is_trt10:
+                    name = model.get_tensor_name(i)
+                    dtype = trt.nptype(model.get_tensor_dtype(name))
+                    is_input = model.get_tensor_mode(name) == trt.TensorIOMode.INPUT
+                    if is_input:
+                        if -1 in tuple(model.get_tensor_shape(name)):
+                            dynamic = True
+                            context.set_input_shape(name, tuple(model.get_tensor_profile_shape(name, 0)[1]))
+                        if dtype == np.float16:
+                            fp16 = True
+                    else:
+                        output_names.append(name)
+                    shape = tuple(context.get_tensor_shape(name))
+                else:  # TensorRT < 10.0
+                    name = model.get_binding_name(i)
+                    dtype = trt.nptype(model.get_binding_dtype(i))
+                    is_input = model.binding_is_input(i)
+                    if model.binding_is_input(i):
+                        if -1 in tuple(model.get_binding_shape(i)):  # dynamic
+                            dynamic = True
+                            context.set_binding_shape(i, tuple(model.get_profile_shape(0, i)[1]))
+                        if dtype == np.float16:
+                            fp16 = True
+                    else:
+                        output_names.append(name)
+                    shape = tuple(context.get_binding_shape(i))
+                im = torch.from_numpy(np.empty(shape, dtype=dtype)).to(device)
+                bindings[name] = Binding(name, dtype, shape, im, int(im.data_ptr()))
+            binding_addrs = OrderedDict((n, d.ptr) for n, d in bindings.items())
+            batch_size = bindings["images"].shape[0]  # if dynamic, this is instead max batch size
 
         # Any other format (unsupported)
         else:
@@ -302,7 +358,7 @@ class AutoBackend(nn.Module):
             >>> model = AutoBackend(weights="path/to/model.onnx")
             >>> model_type = model._model_type()  # returns "onnx"
         """
-        from utils import export_formats
+        from engine.exporter import export_formats
         from utils.checks import check_suffix
 
         sf = export_formats()["Suffix"]  # export suffixes
@@ -310,8 +366,7 @@ class AutoBackend(nn.Module):
             check_suffix(p, sf)
         name = Path(p).name
         types = [s in name for s in sf]
-        types[5] |= name.endswith(".mlmodel")  # retain support for older Apple CoreML *.mlmodel formats
-        types[8] &= not types[9]  # tflite &= not edgetpu
+
         triton = False
         if any(types):
             triton = False

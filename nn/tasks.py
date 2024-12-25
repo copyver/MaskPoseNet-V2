@@ -46,9 +46,6 @@ def attempt_load_one_weight(weight, device=None, inplace=True, fuse=False):
 
     model = ckpt["model"].to(device).float()  # FP32 model
 
-    # Model compatibility updates
-    # args = cfg
-    # model.args = {k: v for k, v in args.items()}  # attach args to model
     model.pt_path = weight  # attach *.pt file path to model
 
     model = model.fuse().eval() if fuse and hasattr(model, "fuse") else model.eval()  # model in eval mode

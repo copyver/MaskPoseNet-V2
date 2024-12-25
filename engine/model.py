@@ -15,6 +15,7 @@ from utils import yaml_model_load, RANK
 from utils.callback import DefaultCallbacks
 from utils.results import Results
 from utils.torch_utils import print_model_summary
+from cfg import get_cfg
 
 
 class Model(nn.Module):
@@ -139,10 +140,6 @@ class Model(nn.Module):
                 Results object.
 
         Examples:
-            >>> model = YOLO("yolo11n.pt")
-            >>> results = model.predict(source="path/to/image.jpg", conf=0.25)
-            >>> for r in results:
-            ...     print(r.boxes.data)  # print detection bounding boxes
 
         Notes:
             - If 'source' is not provided, it defaults to the ASSETS constant with a warning.
@@ -159,6 +156,52 @@ class Model(nn.Module):
             self.predictor.setup_model(model=self.model)
 
         return self.predictor(source=source, stream=stream)
+
+    def export(
+            self,
+            override=None,
+    ) -> str:
+        """
+        Exports the model to a different format suitable for deployment.
+
+        This method facilitates the export of the model to various formats (e.g., ONNX, TorchScript) for deployment
+        purposes. It uses the 'Exporter' class for the export process, combining model-specific overrides, method
+        defaults, and any additional arguments provided.
+
+        Args:
+            **kwargs (Dict): Arbitrary keyword arguments to customize the export process. These are combined with
+                the model's overrides and method defaults. Common arguments include:
+                format (str): Export format (e.g., 'onnx', 'engine', 'coreml').
+                half (bool): Export model in half-precision.
+                int8 (bool): Export model in int8 precision.
+                device (str): Device to run the export on.
+                workspace (int): Maximum memory workspace size for TensorRT engines.
+                nms (bool): Add Non-Maximum Suppression (NMS) module to model.
+                simplify (bool): Simplify ONNX model.
+
+        Returns:
+            (str): The path to the exported model file.
+
+        Raises:
+            AssertionError: If the model is not a PyTorch model.
+            ValueError: If an unsupported export format is specified.
+            RuntimeError: If the export process fails due to errors.
+        """
+        self._check_is_pytorch_model()
+        from engine.exporter import Exporter
+
+        # custom = {
+        #     "imgsz": self.model.args["imgsz"],
+        #     "batch": 1,
+        #     "data": None,
+        #     "device": None,  # reset to avoid multi-GPU errors
+        #     "verbose": False,
+        # }  # method defaults
+        # args = {**custom, **kwargs, "mode": "export"}  # highest priority args on the right
+        if override:
+            self.cfg = get_cfg(self.cfg, override)
+            print(self.cfg)
+        return Exporter(cfg=self.cfg, _callbacks=DefaultCallbacks)(model=self.model)
 
     def _check_is_pytorch_model(self) -> None:
         """

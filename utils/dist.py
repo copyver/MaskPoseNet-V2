@@ -28,7 +28,7 @@ def generate_ddp_file(trainer):
 
     content = f"""
 # Ultralytics Multi-GPU training temp file (should be automatically deleted after use)
-overrides = {vars(trainer.args)}
+overrides = {vars(trainer.cfg)}
 
 if __name__ == "__main__":
     from {module} import {name}
@@ -37,7 +37,7 @@ if __name__ == "__main__":
     cfg = DEFAULT_CFG_DICT.copy()
     cfg.update(save_dir='')   # handle the extra key 'save_dir'
     trainer = {name}(cfg=cfg, overrides=overrides)
-    trainer.args.model = "{getattr(trainer.hub_session, 'model_url', trainer.args.model)}"
+    trainer.args.model = "{getattr(trainer.hub_session, 'model_url', trainer.cfg.model)}"
     results = trainer.train()
 """
     (USER_CONFIG_DIR / "DDP").mkdir(exist_ok=True)

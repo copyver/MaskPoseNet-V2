@@ -282,7 +282,7 @@ class BaseTrainer:
             self.best.write_bytes(serialized_ckpt)  # save best.pt
         if (self.save_epoch_freq > 0) and (self.epoch % self.save_epoch_freq == 0):
             (self.checkpoint_dir / f"epoch{self.epoch}.pt").write_bytes(serialized_ckpt)  # save epoch, i.e. 'epoch3.pt'
-        # if self.args.close_mosaic and self.epoch == (self.epochs - self.args.close_mosaic - 1):
+        # if self.cfg.close_mosaic and self.epoch == (self.epochs - self.cfg.close_mosaic - 1):
         #    (self.wdir / "last_mosaic.pt").write_bytes(serialized_ckpt)  # save mosaic checkpoint
 
     def read_results_csv(self):
@@ -391,7 +391,7 @@ class BaseTrainer:
                 v.requires_grad = True
 
         # AMP  Todo: add amp
-        # self.amp = torch.tensor(self.args.amp).to(self.device)  # True or False
+        # self.amp = torch.tensor(self.cfg.amp).to(self.device)  # True or False
         # if self.amp and RANK in {-1, 0}:  # Single-GPU and DDP
         #     callbacks_backup = callbacks.default_callbacks.copy()  # backup callbacks as check_amp() resets them
         #     self.amp = torch.tensor(check_amp(self.model), device=self.device)

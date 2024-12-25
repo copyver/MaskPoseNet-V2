@@ -310,8 +310,8 @@ def strip_optimizer(f: Union[str, Path] = "best.pt", s: str = "", updates: dict 
     # Update model
     if x.get("ema"):
         x["model"] = x["ema"]  # replace model with EMA
-    if hasattr(x["model"], "args"):
-        x["model"].args = dict(x["model"].args)  # convert from IterableSimpleNamespace to dict
+    if hasattr(x["model"], "cfg"):
+        x["model"].cfg = dict(x["model"].cfg)  # convert from IterableSimpleNamespace to dict
     if hasattr(x["model"], "criterion"):
         x["model"].criterion = None  # strip loss criterion
     x["model"].half()  # to FP16
@@ -319,12 +319,12 @@ def strip_optimizer(f: Union[str, Path] = "best.pt", s: str = "", updates: dict 
         p.requires_grad = False
 
     # Update other keys
-    args = {**x.get("train_args", {})}  # combine args
+    args = {**x.get("train_args", {})}  # combine cfg
     for k in "optimizer", "best_fitness", "ema", "updates":  # keys
         x[k] = None
     x["epoch"] = -1
     x["train_args"] = {k: v for k, v in args.items()}  # strip non-default keys
-    # x['model'].args = x['train_args']
+    # x['model'].cfg = x['train_args']
 
     # Save
     combined = {**metadata, **x, **(updates or {})}
@@ -332,3 +332,9 @@ def strip_optimizer(f: Union[str, Path] = "best.pt", s: str = "", updates: dict 
     mb = os.path.getsize(s or f) / 1e6  # file size
     logger.info(f"Optimizer stripped from {f},{f' saved as {s},' if s else ''} {mb:.1f}MB")
     return combined
+
+
+def get_latest_opset():
+    """Return the second-most recent ONNX opset version supported by this version of PyTorch, adjusted for maturity."""
+    return max(int(k[14:]) for k in vars(torch.onnx) if "symbolic_opset" in k) - 1
+

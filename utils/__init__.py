@@ -5,6 +5,11 @@ from loguru import logger
 import re
 import platform
 import os
+import inspect
+from types import SimpleNamespace
+
+
+__version__ = "0.0.1"
 MACOS, LINUX, WINDOWS = (platform.system() == x for x in ["Darwin", "Linux", "Windows"])
 PIN_MEMORY = str(os.getenv("PIN_MEMORY", True)).lower() == "true"
 NUM_THREADS = min(8, max(1, os.cpu_count() - 1))
@@ -199,25 +204,18 @@ def yaml_print(configs):
     _print_dict(configs)
 
 
-def export_formats():
-    """Ultralytics YOLO export formats."""
-    x = [
-        ["PyTorch", "-", ".pt", True, True],
-        ["TorchScript", "torchscript", ".torchscript", True, True],
-        ["ONNX", "onnx", ".onnx", True, True],
-        ["OpenVINO", "openvino", "_openvino_model", True, False],
-        ["TensorRT", "engine", ".engine", False, True],
-        ["CoreML", "coreml", ".mlpackage", True, False],
-        ["TensorFlow SavedModel", "saved_model", "_saved_model", True, True],
-        ["TensorFlow GraphDef", "pb", ".pb", True, True],
-        ["TensorFlow Lite", "tflite", ".tflite", True, False],
-        ["TensorFlow Edge TPU", "edgetpu", "_edgetpu.tflite", True, False],
-        ["TensorFlow.js", "tfjs", "_web_model", True, False],
-        ["PaddlePaddle", "paddle", "_paddle_model", True, True],
-        ["MNN", "mnn", ".mnn", True, True],
-        ["NCNN", "ncnn", "_ncnn_model", True, True],
-    ]
-    return dict(zip(["Format", "Argument", "Suffix", "CPU", "GPU"], zip(*x)))
+def get_default_args(func):
+    """
+    Returns a dictionary of default arguments for a function.
+
+    Args:
+        func (callable): The function to inspect.
+
+    Returns:
+        (dict): A dictionary where each key is a parameter name, and each value is the default value of that parameter.
+    """
+    signature = inspect.signature(func)
+    return {k: v.default for k, v in signature.parameters.items() if v.default is not inspect.Parameter.empty}
 
 
 class SimpleClass:
@@ -274,6 +272,64 @@ class SimpleClass:
         raise AttributeError(f"'{name}' object has no attribute '{attr}'. See valid attributes below.\n{self.__doc__}")
 
 
+class IterableSimpleNamespace(SimpleNamespace):
+    """
+    An iterable SimpleNamespace class that provides enhanced functionality for attribute access and iteration.
+
+    This class extends the SimpleNamespace class with additional methods for iteration, string representation,
+    and attribute access. It is designed to be used as a convenient container for storing and accessing
+    configuration parameters.
+
+    Methods:
+        __iter__: Returns an iterator of key-value pairs from the namespace's attributes.
+        __str__: Returns a human-readable string representation of the object.
+        __getattr__: Provides a custom attribute access error message with helpful information.
+        get: Retrieves the value of a specified key, or a default value if the key doesn't exist.
+
+    Examples:
+        >>> cfg = IterableSimpleNamespace(a=1, b=2, c=3)
+        >>> for k, v in cfg:
+        ...     print(f"{k}: {v}")
+        a: 1
+        b: 2
+        c: 3
+        >>> print(cfg)
+        a=1
+        b=2
+        c=3
+        >>> cfg.get("b")
+        2
+        >>> cfg.get("d", "default")
+        'default'
+
+    Notes:
+        This class is particularly useful for storing configuration parameters in a more accessible
+        and iterable format compared to a standard dictionary.
+    """
+
+    def __iter__(self):
+        """Return an iterator of key-value pairs from the namespace's attributes."""
+        return iter(vars(self).items())
+
+    def __str__(self):
+        """Return a human-readable string representation of the object."""
+        return "\n".join(f"{k}={v}" for k, v in vars(self).items())
+
+    def __getattr__(self, attr):
+        """Custom attribute access error message with helpful information."""
+        name = self.__class__.__name__
+        raise AttributeError(
+            f"""
+            '{name}' object has no attribute '{attr}'. This may be caused by a modified or out of date ultralytics
+            'default.yaml' file.
+            """
+        )
+
+    def get(self, key, default=None):
+        """Return the value of the specified key if it exists; otherwise, return the default value."""
+        return getattr(self, key, default)
+
+
 def get_override_cfg(cfg=None, **kwargs):
     """
     合并 cfg 和 kwargs，检查 cfg 中的键是否存在，若存在则覆盖，不存在则新增。
@@ -295,6 +351,35 @@ def get_override_cfg(cfg=None, **kwargs):
         cfg.key = value  # 添加或更新 cfg
 
     return cfg
+
+
+def is_ubuntu() -> bool:
+    """
+    Check if the OS is Ubuntu.
+
+    Returns:
+        (bool): True if OS is Ubuntu, False otherwise.
+    """
+    try:
+        with open("/etc/os-release") as f:
+            return "ID=ubuntu" in f.read()
+    except FileNotFoundError:
+        return False
+
+
+def get_ubuntu_version():
+    """
+    Retrieve the Ubuntu version if the OS is Ubuntu.
+
+    Returns:
+        (str): Ubuntu version or None if not an Ubuntu OS.
+    """
+    if is_ubuntu():
+        try:
+            with open("/etc/os-release") as f:
+                return re.search(r'VERSION_ID="(\d+\.\d+)"', f.read())[1]
+        except (FileNotFoundError, AttributeError):
+            return None
 
 
 if __name__ == "__main__":
