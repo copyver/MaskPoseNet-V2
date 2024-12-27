@@ -117,7 +117,7 @@ class Model(nn.Module):
             source: Dict = None,
             stream: bool = False,
             predictor=None,
-            **kwargs,
+            override=None,
     ) -> List[Results]:
         """
         Performs predictions on the given image source using the YOLO model.
@@ -127,6 +127,7 @@ class Model(nn.Module):
         types of image sources and can operate in a streaming mode.
 
         Args:
+            override:
             source (str | Path | int | PIL.Image | np.ndarray | torch.Tensor | List | Tuple): The source
                 of the image(s) to make predictions on. Accepts various types including file paths, URLs, PIL
                 images, numpy arrays, and torch tensors.
@@ -148,6 +149,9 @@ class Model(nn.Module):
         """
         if source is None:
             logger.warning(f"WARNING 'source' is missing. Using 'source={source}'.")
+        if override:
+            self.cfg = get_cfg(self.cfg, override)
+            print(self.cfg)
 
         if not self.predictor:
             self.predictor = (predictor or self._smart_load("predictor"))(cfg=self.cfg,

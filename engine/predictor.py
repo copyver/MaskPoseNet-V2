@@ -21,14 +21,14 @@ class BasePredictor:
         dataset (Dataset): Dataset used for prediction.
     """
 
-    def __init__(self, cfg=None, save_dir: (Path, str) = None, verbose=False, _callbacks=None, **kwargs):
+    def __init__(self, cfg=None, save_dir: (Path, str) = None, verbose=False, _callbacks=None):
         """
         Initializes the BasePredictor class.
 
         Args:
             cfg (str, optional): Path to a configuration file. Defaults to DEFAULT_CFG.
         """
-        self.cfg = get_override_cfg(cfg, **kwargs)
+        self.cfg = cfg
 
         self.save_dir = self.get_save_dir(save_dir)
         self.done_warmup = False
