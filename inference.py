@@ -19,10 +19,13 @@ from engine.model import Model
 
 if __name__ == "__main__":
     model = Model(
-        model="middle_log/0107-indus12000-train/checkpoints/best.pt",
+        model="middle_log/0108-indus100-train/checkpoints/best.pt",
         task='pose',
-        verbose=False
+        verbose=False,
+        is_train=False,
+        device="cuda",
     )
+
     source = {
         "image": "/home/yhlever/DeepLearning/6D_object_pose_estimation/datasets/indus/indus-12000t-1200v"
                  "/val/images/color_ims/image_000512.png",
@@ -46,13 +49,12 @@ if __name__ == "__main__":
                      "/home/yhlever/DeepLearning/6D_object_pose_estimation/datasets/indus/indus-12000t-1200v/val/"
                      "images/modal_masks/image_000512/channel_008.png",
                      ],
-        "obj": [5, 5, 5, 5, 6, 1, 6, 1],
+        "cls_ids": [5, 5, 5, 5, 6, 1, 6, 1],
         "camera_k": np.array([
             [1039.5527733689619, 0.0, 639.3049718803047,],
             [0.0, 1039.5527733689619, 479.5612565995002,],
             [0.0, 0.0, 1.0,],
         ], dtype=np.float64),
-        "class_names": ["BG", "handle", "socket01", "socket02", "socket03", "socket04", "socket05"]
     }
     # source = {
     #     "image": "/home/yhlever/DeepLearning/6D_object_pose_estimation/datasets/indus/handle-100t-10v/val/images"
@@ -69,13 +71,12 @@ if __name__ == "__main__":
     #                  "/home/yhlever/DeepLearning/6D_object_pose_estimation/datasets/indus/handle-100t-10v/val/images"
     #                  "/modal_masks/image_000004/channel_003.png",
     #                  ],
-    #     "obj": [1, 1, 1, 1],
+    #     "cls_ids": [1, 1, 1, 1],
     #     "camera_k": np.array([
     #         [1067.13, 0.0, 640.08, ],
     #         [0.0, 1067.13, 478.95, ],
     #         [0.0, 0.0, 1.0],
     #     ], dtype=np.float64),
-    #     "class_names": ["BG", "handle",]
     #  }
-    result = model.predict(source, override="cfg/indus.yaml")
+    result = model.predict(source)
     print("Successful Inference")

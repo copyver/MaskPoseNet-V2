@@ -9,7 +9,7 @@ import inspect
 from types import SimpleNamespace
 
 
-__version__ = "0.0.1"
+__version__ = "1.1.0"
 MACOS, LINUX, WINDOWS = (platform.system() == x for x in ["Darwin", "Linux", "Windows"])
 PIN_MEMORY = str(os.getenv("PIN_MEMORY", True)).lower() == "true"
 NUM_THREADS = min(8, max(1, os.cpu_count() - 1))

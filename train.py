@@ -6,6 +6,7 @@ def main():
         model='cfg/indus.yaml',
         task='pose',
         verbose=False,
+        is_train=True
     )
 
     model.train()

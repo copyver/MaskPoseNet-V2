@@ -12,7 +12,7 @@ import torch.distributed as dist
 import torch.nn as nn
 from loguru import logger
 
-from utils import NUM_THREADS
+from utils import NUM_THREADS, __version__
 from utils.checks import check_version
 
 TORCH_2_4 = check_version(torch.__version__, "2.4.0")
@@ -270,13 +270,14 @@ def smart_inference_mode():
     return decorate
 
 
-def strip_optimizer(f: Union[str, Path] = "best.pt", s: str = "", updates: dict = None) -> dict:
+def strip_optimizer(f: Union[str, Path] = "best.pt", s: str = "", to_half: bool = False, updates: dict = None) -> dict:
     """
     Strip optimizer from 'f' to finalize training, optionally save as 's'.
 
     Args:
         f (str): file path to model to strip the optimizer from. Default is 'best.pt'.
         s (str): file path to save the model with stripped optimizer to. If not provided, 'f' will be overwritten.
+        to_half (bool): if to convert to half
         updates (dict): a dictionary of updates to overlay onto the checkpoint before saving.
 
     Returns:
@@ -295,39 +296,41 @@ def strip_optimizer(f: Union[str, Path] = "best.pt", s: str = "", updates: dict 
         Use `ultralytics.nn.torch_safe_load` for missing modules with `x = torch_safe_load(f)[0]`
     """
     try:
-        x = torch.load(f, map_location=torch.device("cpu"))
-        assert isinstance(x, dict), "checkpoint is not a Python dictionary"
-        assert "model" in x, "'model' missing from checkpoint"
+        ckpt = torch.load(f, map_location=torch.device("cpu"))
+        assert isinstance(ckpt, dict), "Checkpoint is not a Python dictionary."
+        assert "model" in ckpt, "Missing 'model' key in checkpoint."
     except Exception as e:
-        logger.warning(f"WARNING  Skipping {f}, not a valid Ultralytics model: {e}")
+        logger.warning(f"WARNING: Skipping {f}, not a valid checkpoint: {e}")
         return {}
 
     metadata = {
         "date": datetime.now().isoformat(),
-        # "version": __version__,
+        "version": __version__,
     }
 
     # Update model
-    if x.get("ema"):
-        x["model"] = x["ema"]  # replace model with EMA
-    if hasattr(x["model"], "cfg"):
-        x["model"].cfg = dict(x["model"].cfg)  # convert from IterableSimpleNamespace to dict
-    if hasattr(x["model"], "criterion"):
-        x["model"].criterion = None  # strip loss criterion
-    x["model"].half()  # to FP16
-    for p in x["model"].parameters():
-        p.requires_grad = False
+    # 只保留基本推理所需的 "model" (state_dict)，故以下键可以被置空
+    ckpt["optimizer"] = None
+    ckpt["best_fitness"] = None
+    ckpt["train_results"] = None
+
+    # 重置 epoch
+    ckpt["epoch"] = -1
+
+    # 将模型参数转为 FP16
+    # model 现已是 state_dict()，我们要遍历其中所有张量，并转换为 half()
+    if to_half:
+        # model 现已是 state_dict()，我们要遍历其中所有张量，并转换为 half()
+        for k, v in ckpt["model"].items():
+            if isinstance(v, torch.Tensor):
+                ckpt["model"][k] = v.half()
 
     # Update other keys
-    args = {**x.get("train_args", {})}  # combine cfg
-    for k in "optimizer", "best_fitness", "ema", "updates":  # keys
-        x[k] = None
-    x["epoch"] = -1
-    x["train_args"] = {k: v for k, v in args.items()}  # strip non-default keys
-    # x['model'].cfg = x['train_args']
+    args = {**ckpt.get("train_args", {})}  # combine cfg
+    ckpt["train_args"] = {k: v for k, v in args.items()}  # strip non-default keys
 
     # Save
-    combined = {**metadata, **x, **(updates or {})}
+    combined = {**metadata, **ckpt, **(updates or {})}
     torch.save(combined, s or f)  # combine dicts (prefer to the right)
     mb = os.path.getsize(s or f) / 1e6  # file size
     logger.info(f"Optimizer stripped from {f},{f' saved as {s},' if s else ''} {mb:.1f}MB")

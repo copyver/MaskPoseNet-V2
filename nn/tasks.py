@@ -29,33 +29,44 @@ def torch_safe_load(weight):
     except ModuleNotFoundError as e:  # e.name is missing module name
         logger.warning(f"{e.name} is  missing module")
 
-    if not isinstance(ckpt, dict):
-        # File is likely a YOLO instance saved with i.e. torch.save(model, "saved_model.pt")
-        logger.warning(
-            f"WARNING The file '{weight}' appears to be improperly saved or formatted. "
-            f"For optimal results, use model.save('filename.pt') to correctly save models."
-        )
-        ckpt = {"model": ckpt.model}
-
     return ckpt, weight
 
 
-def attempt_load_one_weight(weight, device=None, inplace=True, fuse=False):
+def attempt_load_one_weight(weight, is_train, device=None):
     """Loads a single model weights."""
-    ckpt, weight = torch_safe_load(weight)  # load ckpt
+    ckpt, weight_path = torch_safe_load(weight)  # load ckpt
 
-    model = ckpt["model"].to(device).float()  # FP32 model
+    if "model" not in ckpt:
+        raise ValueError(f"'model' key missing in checkpoint {weight_path}")
 
-    model.pt_path = weight  # attach *.pt file path to model
+    # 根据 'model' 是 state_dict 还是完整 nn.Module，做区分
+    model_data = ckpt["model"]
 
-    model = model.fuse().eval() if fuse and hasattr(model, "fuse") else model.eval()  # model in eval mode
+    if isinstance(model_data, dict):
+        # 只保存了 model.state_dict()
+        from models import PoseModel
+        from easydict import EasyDict
+        if PoseModel is None:
+            raise ValueError(
+                "Checkpoint contains only a state_dict, but no model_builder provided!\n"
+                "Please provide a callable model_builder() that returns an uninitialized model."
+            )
+        # 创建模型实例 load_state_dict
+        model_cfg = EasyDict(ckpt["train_args"]['POSE_MODEL'])
+        if not is_train:
+            model_cfg.FEATURE_EXTRACTION.PRETRAINED = False # inference not need to load pretrained mae weights
 
-    # Module updates
-    for m in model.modules():
-        if hasattr(m, "inplace"):
-            m.inplace = inplace
-        elif isinstance(m, nn.Upsample) and not hasattr(m, "recompute_scale_factor"):
-            m.recompute_scale_factor = None  # torch 1.11.0 compatibility
+        model = PoseModel(model_cfg)
+        model.load_state_dict(model_data)
+        model.to(device).float()
+    else:
+        # nn.Module 对象序列化
+        model = model_data.to(device).float()
+
+    model.pt_path = weight_path  # attach *.pt file path to model
+    model.class_names = ckpt.get("class_names", None)
+
+    model = model.eval()
 
     # Return model and ckpt
     return model, ckpt

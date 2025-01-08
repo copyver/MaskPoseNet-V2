@@ -1,32 +1,30 @@
 import os
+import re
+from pathlib import Path
 from typing import Dict
+from typing import List, Union
 
-import cv2
-import numpy as np
-import torch
-import trimesh
-from torchvision import transforms
 import cv2
 import numpy as np
 import onnxruntime as ort
-from pathlib import Path
-import re
+import torch
+import trimesh
 import yaml
+from torchvision import transforms
 
-model_path = "/home/yhlever/DeepLearning/MaskPoseNet-V2/middle_log/1223_train/checkpoints/last.pt"
-device = "cuda"
-ckpt = torch.load(model_path, map_location=device)
-model = ckpt["model"].to(device).float()
-model.eval()
-for p in model.parameters():
-    p.requires_grad = False
-
-onnxsession = ort.InferenceSession(
-    '/home/yhlever/DeepLearning/ultralytics/runs/segment/train4/weights/best.onnx',
-    providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
-    if ort.get_device() == "GPU"
-    else ["CPUExecutionProvider"],
-)
+DefaultArgs = {
+    "MODEL_DIR": "/home/yhlever/DeepLearning/6D_object_pose_estimation/datasets/indus/models",
+    "TEMPLATE_DIR": "/home/yhlever/DeepLearning/6D_object_pose_estimation/datasets/indus/templates",
+    "IMG_SIZE": 224,
+    "N_SAMPLE_OBSERVED_POINT": 2048,
+    "N_SAMPLE_TEMPLATE_POINT": 5000,
+    "N_SAMPLE_MODEL_POINT": 1024,
+    "MINIMUM_N_POINT": 8,
+    "RGB_MASK_FLAG": True,
+    "SEG_FILTER_SCORE": 0.25,
+    "N_TEMPLATE_VIEW": 42,
+    "DEPTH_SCALE": 5.0,
+}
 
 
 class Colors:
@@ -93,7 +91,8 @@ class Colors:
 
     !!! note "Ultralytics Brand Colors"
 
-        For Ultralytics brand colors see [https://www.ultralytics.com/brand](https://www.ultralytics.com/brand). Please use the official Ultralytics colors for all marketing materials.
+        For Ultralytics brand colors see [https://www.ultralytics.com/brand](https://www.ultralytics.com/brand).
+        Please use the official Ultralytics colors for all marketing materials.
     """
 
     def __init__(self):
@@ -191,9 +190,6 @@ class ModelSeg:
     def __init__(self, onnxsession):
         """
         Initialization.
-
-        Args:
-            onnx_model (str): Path to the ONNX model.
         """
         # Build Ort session
         self.session = onnxsession
@@ -206,7 +202,7 @@ class ModelSeg:
 
         # Load COCO class names
         self.classes = \
-        yaml_load("/home/yhlever/DeepLearning/ultralytics/ultralytics/cfg/datasets/handle-seg-real.yaml")["names"]
+            yaml_load("/home/yhlever/DeepLearning/ultralytics/ultralytics/cfg/datasets/indus-seg.yaml")["names"]
 
         # Create color palette
         self.color_palette = Colors()
@@ -513,62 +509,105 @@ class ModelSeg:
 class ModelPose:
     """PoseEstimation Model"""
 
-    def __init__(self, pt_model):
+    def __init__(self, pt_model: str, args: Dict = None, device: Union[str, int, List[int,],] = "cuda"):
         """
         Initialization.
-
         Args:
             pt_model (str): Path to the pt model.
         """
-        self.model = pt_model
+        self.weights = pt_model
+        self.device = device
+        self.args = args
+        self.model = None
+        self.class_names = None
+        self._load()
 
-    def __call__(self, args: Dict, source: Dict):
-        image, depth_image, seg_mask, obj, camera_k = (
-            source["image"],
-            source["depth_image"],
-            source["seg_mask"],
-            source["obj"],
-            source["camera_k"]
-        )
-        batch, image, depth_image, mask, whole_model_points = self.load_pose_inference_source(
-            image=image,
-            depth_image=depth_image,
-            mask=seg_mask,
-            obj=obj,
-            camera_k=camera_k,
-            args=args,
-        )
+    def __call__(self, source: Dict):
+        with torch.no_grad():
+            batch, whole_model_points = self.load_pose_inference_source(
+                image=source["image"],
+                depth_image=source["depth_image"],
+                mask=source["seg_mask"],
+                obj=source["cls_ids"],
+                camera_k=source["camera_k"],
+            )
 
-        batch = self.preprocess(batch, device)
-        end_points = self.inference(batch, model, device, args)
-        preds = self.postprocess(end_points)
-        preds["whole_model_points"] = whole_model_points
+            batch = self.preprocess(batch)
+            end_points = self.inference(batch)
+            preds = self.postprocess(end_points)
+            preds["whole_model_points"] = whole_model_points
         return preds
 
-    def preprocess(self, batch, device):
+    def _load(self):
+        if Path(self.weights).suffix == ".pt":
+            self.model, _ = self._attempt_load_one_weight()
+        else:
+            raise ValueError(f"Unsupported weights file '{self.weights}'")
+
+    def _attempt_load_one_weight(self):
+        """Loads a single model weights."""
+        ckpt = torch.load(self.weights, map_location="cpu")
+
+        if "model" not in ckpt:
+            raise ValueError(f"'model' key missing in checkpoint {self.weights}")
+        if "class_names" not in ckpt:
+            raise ValueError(f"'class_names' key missing in checkpoint {self.weights}")
+        self.class_names = ckpt["class_names"]
+
+        # 根据 'model' 是 state_dict 还是完整 nn.Module，做区分
+        model_data = ckpt["model"]
+
+        if isinstance(model_data, dict):
+            # 只保存了 model.state_dict()
+            from models import PoseModel
+            from easydict import EasyDict
+            if PoseModel is None:
+                raise ValueError(
+                    "Checkpoint contains only a state_dict, but no model_builder provided!\n"
+                    "Please provide a callable model_builder() that returns an uninitialized model."
+                )
+            # 创建模型实例 load_state_dict
+            model_cfg = EasyDict(ckpt["train_args"]['POSE_MODEL'])
+            model_cfg.FEATURE_EXTRACTION.PRETRAINED = False  # inference not need to load pretrained mae weights
+            model = PoseModel(model_cfg)
+            model.load_state_dict(model_data)
+            model.to(self.device).float()
+        else:
+            # nn.Module 对象序列化
+            model = model_data.to(self.device).float()
+
+        model.pt_path = self.weights  # attach *.pt file path to model
+
+        model = model.eval()
+
+        # Return model and ckpt
+        return model, ckpt
+
+    def preprocess(self, batch):
         if isinstance(batch, dict):
             for key, value in batch.items():
                 if isinstance(value, list):
-                    batch[key] = [item.to(device, non_blocking=True) if torch.is_tensor(item) else item for item in
+                    batch[key] = [item.to(self.device, non_blocking=True) if torch.is_tensor(item) else item for item in
                                   value]
                 elif torch.is_tensor(value):
-                    batch[key] = value.to(device, non_blocking=True)
+                    batch[key] = value.to(self.device, non_blocking=True)
             return batch
         elif torch.is_tensor(batch):
-            return batch.to(device, non_blocking=True)
+            return batch.to(self.device, non_blocking=True)
         else:
             raise TypeError(f"Unsupported type for batch: {type(batch)}")
 
-    def inference(self, batch, model, device, args):
-        obj = batch['obj'].cpu().numpy()
+    def inference(self, batch):
+        objs = batch['obj'].cpu().numpy()
+        cls_names = [self.class_names[obj] for obj in objs]
         all_dense_po = []
         all_dense_fo = []
 
-        for o in obj:
-            all_tem, all_tem_pts, all_tem_choose = self.get_all_templates(args, o, device)
+        for cls_name in cls_names:
+            all_tem, all_tem_pts, all_tem_choose = self.get_all_templates(cls_name)
 
             # 调用特征提取函数
-            dense_po, dense_fo = model.feature_extraction.get_obj_feats(
+            dense_po, dense_fo = self.model.feature_extraction.get_obj_feats(
                 all_tem, all_tem_pts, all_tem_choose
             )
             all_dense_po.append(dense_po.squeeze(0))
@@ -580,35 +619,36 @@ class ModelPose:
         batch['dense_po'] = batch_dense_po
         batch['dense_fo'] = batch_dense_fo
 
-        end_points = model(batch)
+        end_points = self.model(batch)
 
         return end_points
 
     def postprocess(self, preds):
         pred_Rs = []
         pred_Ts = []
-        pred_scores = []
+        pose_scores = []
         pred_Rs.append(preds['pred_R'])
         pred_Ts.append(preds['pred_t'])
-        pred_scores.append(preds['pred_pose_score'])
+        pose_scores.append(preds['pred_pose_score'])
         pred_Rs = torch.cat(pred_Rs, dim=0).reshape(-1, 9).detach().cpu().numpy()
         pred_Ts = torch.cat(pred_Ts, dim=0).detach().cpu().numpy()
-        pred_scores = torch.cat(pred_scores, dim=0).detach().cpu().numpy()
+        pose_scores = torch.cat(pose_scores, dim=0).detach().cpu().numpy()
         preds = {
             'pred_Rs': pred_Rs,
             'pred_Ts': pred_Ts,
-            'pred_scores': pred_scores,
+            'pose_scores': pose_scores,
         }
         return preds
 
-    def get_models(self, file_base, category_id, n_sample):
-        category_id_str = f"obj_{int(category_id):02d}.obj"
-        mesh_path = os.path.join(file_base, category_id_str)
+    @staticmethod
+    def get_models(file_base, cls_name, n_sample):
+        mesh_path = os.path.join(file_base, cls_name + '.obj')
         mesh = trimesh.load(mesh_path, force='mesh')
         model_pts, _ = trimesh.sample.sample_surface(mesh, n_sample)
         return model_pts.astype(np.float32)
 
-    def get_bbox(self, label):
+    @staticmethod
+    def get_bbox(label):
         img_width, img_length = label.shape
         rows = np.any(label, axis=1)
         cols = np.any(label, axis=0)
@@ -676,33 +716,11 @@ class ModelPose:
         choose = (np.floor(row_idx * ratio_h) * img_size + np.floor(col_idx * ratio_w)).astype(np.int64)
         return choose
 
-    def load_pose_inference_source(self, image, depth_image, mask, obj, camera_k, args):
+    def load_pose_inference_source(self, image, depth_image, mask, obj, camera_k):
         """
         Loads data sources for pose estimation, normalizes the input image, depth map, and mask,
         and generates a dictionary containing point clouds, RGB data, model points, and other relevant information.
         Supports batch processing for multiple objects.
-
-        Args:
-            image (str or Path or numpy.ndarray):
-                Path to the image or a numpy array in BGR format loaded with cv2.
-            depth_image (str or Path or numpy.ndarray):
-                Path to the depth map or a numpy array representing depth values.
-            mask (str or Path or numpy.ndarray or list):
-                Single or multiple mask paths or numpy arrays with values in the range [0, 1] or [0, 255].
-                For multiple objects, provide a list of masks corresponding to each object in `obj`.
-            obj (int or list):
-                Single or multiple object IDs. For multiple objects, provide a list of IDs.
-            camera_k (numpy.ndarray):
-                Camera intrinsic matrix of shape (3, 3).
-        Returns:
-            dict: A dictionary containing the following keys:
-                - 'pts': A numpy array of shape [batch, n_sample_observed_point, 3] representing point clouds.
-                - 'rgb': A numpy array of shape [batch, 3, IMG_SIZE, IMG_SIZE] containing normalized RGB data.
-                - 'rgb_choose': A numpy array of shape [batch, n_sample_observed_point] with chosen RGB indices.
-                - 'model': A numpy array of shape [batch, N_SAMPLE_MODEL_POINT, 3] representing model points.
-                - 'obj': A numpy array of shape [batch] containing object IDs.
-            numpy.ndarray: The original RGB image.
-            numpy.ndarray: The complete set of model points.
         """
         # 确保obj和mask是列表，以便统一处理多对象场景
         if not isinstance(obj, (list, tuple)):
@@ -728,22 +746,15 @@ class ModelPose:
         camera_k = np.array(camera_k, dtype=np.float32).reshape(3, 3)
 
         # 模型点加载
-        model_dir = args["MODEL_DIR"]
+        model_dir = self.args["MODEL_DIR"]
 
         # 将RGB从BGR转为RGB备用
         rgb_img = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
         # 深度归一化为米
-        depth = depth_image.astype(np.float32) * args["DEPTH_SCALE"] / 1000.0
+        depth = depth_image.astype(np.float32) * self.args["DEPTH_SCALE"] / 1000.0 + 0.085
 
         whole_pts = self.get_point_cloud_from_depth(depth, camera_k)
-
-        # 定义transform
-        transform = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                 std=[0.229, 0.224, 0.225])
-        ])
 
         all_pts = []
         all_rgb = []
@@ -756,13 +767,12 @@ class ModelPose:
             # 加载/检查mask
             if m is None or not isinstance(m, np.ndarray):
                 raise ValueError("Mask is not a valid numpy array")
-
-            # 检查mask值范围，若在0-1之间则转换到0-255
             m = m.astype(np.uint8)
 
-            model_points = self.get_models(model_dir, o, args["N_SAMPLE_MODEL_POINT"])
+            cls_name = self.class_names[o]
+            model_points = self.get_models(model_dir, cls_name, self.args["N_SAMPLE_MODEL_POINT"])
             if model_points is None:
-                continue
+                raise ValueError("Model points not found for class {}".format(cls_name))
             radius = np.max(np.linalg.norm(model_points, axis=1))
 
             # 获取mask的bbox
@@ -783,23 +793,26 @@ class ModelPose:
             pts = pts[flag]
 
             # 采样点
-            if len(choose) < args["N_SAMPLE_OBSERVED_POINT"]:
-                choose_idx = np.random.choice(np.arange(len(choose)), args["N_SAMPLE_OBSERVED_POINT"], replace=True)
+            if len(choose) < self.args["N_SAMPLE_OBSERVED_POINT"]:
+                choose_idx = np.random.choice(np.arange(len(choose)), self.args["N_SAMPLE_OBSERVED_POINT"],
+                                              replace=True)
             else:
-                choose_idx = np.random.choice(np.arange(len(choose)), args["N_SAMPLE_OBSERVED_POINT"], replace=False)
+                choose_idx = np.random.choice(np.arange(len(choose)), self.args["N_SAMPLE_OBSERVED_POINT"],
+                                              replace=False)
 
             choose = choose[choose_idx]
             pts = pts[choose_idx]
 
             # 裁剪并处理RGB
             sub_rgb = rgb_img[y1:y2, x1:x2, :]
-            if args["RGB_MASK_FLAG"]:
+            if self.args["RGB_MASK_FLAG"]:
                 sub_rgb = sub_rgb * (sub_mask[:, :, None] > 0).astype(np.uint8)
-            sub_rgb = cv2.resize(sub_rgb, (args["IMG_SIZE"], args["IMG_SIZE"]), interpolation=cv2.INTER_LINEAR)
-            sub_rgb = transform(sub_rgb)  # [C,H,W]
+            sub_rgb = cv2.resize(sub_rgb, (self.args["IMG_SIZE"], self.args["IMG_SIZE"]),
+                                 interpolation=cv2.INTER_LINEAR)
+            sub_rgb = self.transform(sub_rgb)  # [C,H,W]
 
             # 获取resize后对应的rgb_choose
-            rgb_choose = self.get_resize_rgb_choose(choose, [y1, y2, x1, x2], args["IMG_SIZE"])
+            rgb_choose = self.get_resize_rgb_choose(choose, [y1, y2, x1, x2], self.args["IMG_SIZE"])
 
             all_pts.append(torch.FloatTensor(pts))
             all_rgb.append(torch.FloatTensor(sub_rgb))
@@ -819,7 +832,7 @@ class ModelPose:
             'obj': torch.cat(all_obj, dim=0).long()  # obj本身是[1]的tensor，这里cat后是[batch]
         }
         whole_model_points = np.stack(whole_model_points, axis=0)
-        return ret_dict, image, depth_image, mask, whole_model_points
+        return ret_dict, whole_model_points
 
     @staticmethod
     def transform(image):
@@ -835,12 +848,11 @@ class ModelPose:
         pyrender_nocs[:, :, 2] *= -1
         return pyrender_nocs
 
-    def get_template(self, args, category_id, tem_index=0):
-        file_base = args["TEMPLATE_DIR"]
-        category_id_str = f"obj_{int(category_id):02d}"
-        rgb_path = os.path.join(file_base, category_id_str, f'rgb_{tem_index}.png')
-        xyz_path = os.path.join(file_base, category_id_str, f'xyz_{tem_index}.npy')
-        mask_path = os.path.join(file_base, category_id_str, f'mask_{tem_index}.png')
+    def get_template(self, cls_name, tem_index=0):
+        file_base = self.args["TEMPLATE_DIR"]
+        rgb_path = os.path.join(file_base, cls_name, f'rgb_{tem_index}.png')
+        xyz_path = os.path.join(file_base, cls_name, f'xyz_{tem_index}.npy')
+        mask_path = os.path.join(file_base, cls_name, f'mask_{tem_index}.png')
 
         mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE) == 255
         bbox = self.get_bbox(mask)
@@ -851,41 +863,41 @@ class ModelPose:
         rgb = cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB)
         rgb = rgb[y1:y2, x1:x2, :]
 
-        if args["RGB_MASK_FLAG"]:
+        if self.args["RGB_MASK_FLAG"]:
             rgb = rgb * (mask[:, :, None] > 0).astype(np.uint8)
-        rgb = cv2.resize(rgb, (args["IMG_SIZE"], args["IMG_SIZE"]), interpolation=cv2.INTER_LINEAR)
+        rgb = cv2.resize(rgb, (self.args["IMG_SIZE"], self.args["IMG_SIZE"]), interpolation=cv2.INTER_LINEAR)
         rgb = self.transform(rgb)
 
         choose = mask.astype(np.float32).flatten().nonzero()[0]
-        if len(choose) <= args["N_SAMPLE_TEMPLATE_POINT"]:
-            choose_idx = np.random.choice(np.arange(len(choose)), args["N_SAMPLE_TEMPLATE_POINT"])
+        if len(choose) <= self.args["N_SAMPLE_TEMPLATE_POINT"]:
+            choose_idx = np.random.choice(np.arange(len(choose)), self.args["N_SAMPLE_TEMPLATE_POINT"])
         else:
-            choose_idx = np.random.choice(np.arange(len(choose)), args["N_SAMPLE_TEMPLATE_POINT"], replace=False)
+            choose_idx = np.random.choice(np.arange(len(choose)), self.args["N_SAMPLE_TEMPLATE_POINT"], replace=False)
         choose = choose[choose_idx]
 
         xyz = np.load(xyz_path).astype(np.float32)
         xyz = self.convert_blender_to_pyrender(xyz)[y1:y2, x1:x2, :]
         xyz = xyz.reshape((-1, 3))[choose, :]
-        choose = self.get_resize_rgb_choose(choose, [y1, y2, x1, x2], args["IMG_SIZE"])
+        choose = self.get_resize_rgb_choose(choose, [y1, y2, x1, x2], self.args["IMG_SIZE"])
 
         return rgb, choose, xyz
 
-    def get_all_templates(self, args, category_id, device):
-        n_template_view = args["N_TEMPLATE_VIEW"]
+    def get_all_templates(self, cls_name):
+        n_template_view = self.args["N_TEMPLATE_VIEW"]
         all_tem_rgb = [[] for i in range(n_template_view)]
         all_tem_choose = [[] for i in range(n_template_view)]
         all_tem_pts = [[] for i in range(n_template_view)]
 
         for i in range(n_template_view):
-            tem_rgb, tem_choose, tem_pts = self.get_template(args, category_id, i)
+            tem_rgb, tem_choose, tem_pts = self.get_template(cls_name, i)
             all_tem_rgb[i].append(torch.FloatTensor(tem_rgb))
             all_tem_choose[i].append(torch.IntTensor(tem_choose).long())
             all_tem_pts[i].append(torch.FloatTensor(tem_pts))
 
         for i in range(n_template_view):
-            all_tem_rgb[i] = torch.stack(all_tem_rgb[i]).to(device, non_blocking=True)
-            all_tem_choose[i] = torch.stack(all_tem_choose[i]).to(device, non_blocking=True)
-            all_tem_pts[i] = torch.stack(all_tem_pts[i]).to(device, non_blocking=True)
+            all_tem_rgb[i] = torch.stack(all_tem_rgb[i]).to(self.device, non_blocking=True)
+            all_tem_choose[i] = torch.stack(all_tem_choose[i]).to(self.device, non_blocking=True)
+            all_tem_pts[i] = torch.stack(all_tem_pts[i]).to(self.device, non_blocking=True)
 
         return all_tem_rgb, all_tem_pts, all_tem_choose
 
@@ -1013,61 +1025,55 @@ def visualize_pose_bbox(results):
 
 
 def main():
-    image = cv2.imread("/home/yhlever/CLionProjects/ROBOT_GRASP_TORCH/results/color.png",
+    pose_model_pt_path = "/home/yhlever/DeepLearning/MaskPoseNet-V2/middle_log/0108-indus100-train/checkpoints/best.pt"
+    device = "cuda"
+
+    onnxsession = ort.InferenceSession(
+        '/home/yhlever/DeepLearning/ultralytics/runs/segment/train5/weights/best.onnx',
+        providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
+        if ort.get_device() == "GPU"
+        else ["CPUExecutionProvider"],
+    )
+    image = cv2.imread("/home/yhlever/DeepLearning/6D_object_pose_estimation/datasets/indus/indus-12000t-1200v"
+                       "/val/images/color_ims/image_000512.png",
                        flags=cv2.IMREAD_COLOR)
-    conf = 0.4
-    iou = 0.7
-    # Build model
-    my_seg_model = ModelSeg(onnxsession)
-
-    # Inference
-    boxes, segments, masks = my_seg_model(image, conf_threshold=conf, iou_threshold=iou)
-    mask_list = [masks[i] for i in range(masks.shape[0])]
-
-
-    # # Draw bboxes and polygons
-    # if len(boxes) > 0:
-    #     my_seg_model.draw_and_visualize(image, boxes, segments, vis=False, save=False)
-    #     masks = my_seg_model.generate_masks(image.shape, segments)
-
-    args = {
-        "MODEL_DIR": "/home/yhlever/DeepLearning/6D_object_pose_estimation/Datasets/HANDLE/models",
-        "TEMPLATE_DIR": "/home/yhlever/DeepLearning/6D_object_pose_estimation/Datasets/HANDLE/templates",
-        "IMG_SIZE": 224,
-        "N_SAMPLE_OBSERVED_POINT": 2048,
-        "N_SAMPLE_TEMPLATE_POINT": 5000,
-        "N_SAMPLE_MODEL_POINT": 1024,
-        "MINIMUM_N_POINT": 8,
-        "RGB_MASK_FLAG": True,
-        "SEG_FILTER_SCORE": 0.25,
-        "N_TEMPLATE_VIEW": 42,
-        "DEPTH_SCALE": 1.0,
-    }
-
-    depth_image = cv2.imread("/home/yhlever/CLionProjects/ROBOT_GRASP_TORCH/results/depth.png",
+    depth_image = cv2.imread("/home/yhlever/DeepLearning/6D_object_pose_estimation/datasets/indus/indus-12000t-1200v"
+                             "/val/images/depth_ims/image_000512.png",
                              flags=cv2.IMREAD_UNCHANGED)
-    # mask = cv2.imread("/home/yhlever/CLionProjects/ROBOT_GRASP_TORCH/results/mask_0.png",
-    #                   flags=cv2.IMREAD_GRAYSCALE)
-    obj = [1] * len(mask_list)
     camera_k = np.array([
-        [1062.67, 0.0, 646.17, ],
-        [0.0, 1062.67, 474.24, ],
-        [0.0, 0.0, 1.0],
+        [1039.5527733689619, 0.0, 639.3049718803047, ],
+        [0.0, 1039.5527733689619, 479.5612565995002, ],
+        [0.0, 0.0, 1.0, ],
     ], dtype=np.float64)
+
     source = {
         "image": image,
         "depth_image": depth_image,
-        "seg_mask": mask_list,
-        "obj": obj,
         "camera_k": camera_k,
     }
-    my_pose_model = ModelPose(model)
-    preds = my_pose_model(args, source)
-    preds["image"] = image
-    preds["camera_k"] = camera_k
+
+    # Build model
+    my_seg_model = ModelSeg(onnxsession)
+    my_pose_model = ModelPose(pose_model_pt_path, args=DefaultArgs, device=device)
+
+    # Inference
+    boxes, segments, masks = my_seg_model(image, conf_threshold=0.4, iou_threshold=0.7)
+    seg_scores = [box[4] for box in boxes]
+    cls_ids = [int(box[5]) + 1 for box in boxes]  # add background class
+    mask_list = [masks[i] for i in range(masks.shape[0])]
+
+    # Draw bboxes and polygons
+    if len(boxes) > 0:
+        my_seg_model.draw_and_visualize(image, boxes, segments, vis=False, save=True)
+
+    source.update({
+        "seg_scores": seg_scores,
+        "cls_ids": cls_ids,
+        "seg_mask": mask_list,
+    })
+    preds = my_pose_model(source)
+    preds.update(source)
     visualize_pose_bbox(preds)
-    # preds["image"] = source["image"]
-    # preds["depth_image"] = source["depth_image"]
 
 
 if __name__ == "__main__":

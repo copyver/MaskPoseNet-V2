@@ -57,7 +57,7 @@ def get_cfg(cfg: Union[str, Path, Dict, edict, SimpleNamespace] = None,
 
     Examples:
         >>> config = get_cfg()  # Load default configuration
-        >>> config = get_cfg("path/to/config.yaml", overrides={"epochs": 50, "batch_size": 16})
+        >>> config = get_cfg("path/to/config.yaml", overrides={"EPOCHS": 50, "BATCH_SIZE": 16})
 
     Notes:
         - If both `cfg` and `overrides` are provided, the values in `overrides` will take precedence.

@@ -67,7 +67,7 @@ class AutoBackend(nn.Module):
         # PyTorch
         elif pt:
             from nn.tasks import attempt_load_one_weight
-            model, _ = attempt_load_one_weight(weights)
+            model, _ = attempt_load_one_weight(weights, is_train=False)
             model = model.half() if fp16 else model.float()
             self.model = model.to(device)
 

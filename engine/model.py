@@ -12,7 +12,7 @@ from cfg import get_cfg
 from engine import PoseTrainer, PosePredictor, PoseValidator, SegTrainer, SegPredictor, SegValidator
 from models import PoseModel, SegModel
 from nn.tasks import attempt_load_one_weight
-from utils import yaml_model_load, RANK
+from utils import yaml_model_load, RANK, yaml_print
 from utils.callback import DefaultCallbacks
 from utils.results import Results
 from utils.torch_utils import print_model_summary
@@ -24,6 +24,8 @@ class Model(nn.Module):
             model: Union[str, Path],
             task: str = None,
             verbose: bool = False,
+            is_train: bool = True,
+            device: str = "cuda",
     ) -> None:
         super().__init__()
         self.predictor = None  # reuse predictor
@@ -34,13 +36,15 @@ class Model(nn.Module):
         self.ckpt_path = None
         self.metrics = None  # validation/training metrics
         self.task = task  # task type
+        self.is_train = is_train
+        self.device = device
         model = str(model).strip()
 
         # Load or create new model
         if Path(model).suffix in {".yaml", ".yml"}:
             self._new(model, task=task, verbose=verbose)
         else:
-            self._load(model, task=task)
+            self._load(model, task=task, is_train=is_train)
 
     def _new(self, cfg: str, task: str = None, verbose: bool = False):
         """
@@ -65,7 +69,7 @@ class Model(nn.Module):
         self.model = self._smart_load("model")(cfg_dict.POSE_MODEL)  # build model
         print_model_summary(self.model, verbose)
 
-    def _load(self, weights: str, task=None) -> None:
+    def _load(self, weights: str, task: str = None, is_train: bool = True) -> None:
         """
         Loads a model from a checkpoint file or initializes it from a weights file.
 
@@ -82,11 +86,10 @@ class Model(nn.Module):
 
         Examples:
             >>> model = Model()
-            >>> model._load("yolo11n.pt")
-            >>> model._load("path/to/weights.pth", task="detect")
+            >>> model._load("path/to/weights.pt", task="pose")
         """
         if Path(weights).suffix == ".pt":
-            self.model, self.ckpt = attempt_load_one_weight(weights)
+            self.model, self.ckpt = attempt_load_one_weight(weights, is_train, self.device)
             self.task = task or self.model.task
             self.ckpt_path = self.model.pt_path
             self.cfg = edict(self.ckpt['train_args'])
@@ -119,7 +122,8 @@ class Model(nn.Module):
         # Update model and cfg after training
         if RANK in {-1, 0}:
             ckpt = self.trainer.best if self.trainer.best.exists() else self.trainer.last
-            self.model, _ = attempt_load_one_weight(ckpt)
+            # training completed, no need to load pre training weights, used for inference in the same stage
+            self.model, _ = attempt_load_one_weight(ckpt, is_train=False)
             self.metrics = getattr(self.trainer.validator, "metrics", None)  # TODO: no metrics returned by DDP
         return self.metrics
 
@@ -158,11 +162,13 @@ class Model(nn.Module):
             - The method sets up a new predictor if not already present and updates its arguments with each call.
             - For SAM-type models, 'prompts' can be passed as a keyword argument.
         """
+        self._check_is_pytorch_model()
+        self.cfg.IS_TRAIN = False
         if source is None:
             logger.warning(f"WARNING 'source' is missing. Using 'source={source}'.")
         if override:
             self.cfg = get_cfg(self.cfg, override)
-            print(self.cfg)
+            yaml_print(self.cfg.POSE_MODEL)
 
         if not self.predictor:
             self.predictor = (predictor or self._smart_load("predictor"))(cfg=self.cfg,

@@ -19,24 +19,15 @@ class PosePredictor(BasePredictor):
 
     def setup_source(self, source):
         """Sets up source and inference mode."""
-        image, depth_image, seg_mask, obj, camera_k, class_names = (
-            source["image"],
-            source["depth_image"],
-            source["seg_mask"],
-            source["obj"],
-            source["camera_k"],
-            source["class_names"],
-        )
         self.dataset, image, depth_image, mask, whole_model_points = load_pose_inference_source(
-            image=image,
-            depth_image=depth_image,
-            mask=seg_mask,
-            obj=obj,
-            camera_k=camera_k,
+            image=source["image"],
+            depth_image=source["depth_image"],
+            mask=source["seg_mask"],
+            obj=source["cls_ids"],
+            camera_k=source["camera_k"],
             cfg=self.cfg.TEST_DATA,
-            class_names=class_names,
+            class_names=self.class_names,
         )
-        self.class_names = class_names
         source['image'] = image
         source['depth_image'] = depth_image
         source['seg_mask'] = mask
@@ -190,4 +181,5 @@ class PosePredictor(BasePredictor):
         self.device = automodel.device  # update device
         self.cfg.HALF = automodel.fp16  # update half
         self.model = automodel
+        self.class_names = automodel.model.class_names
         self.model.model.eval()

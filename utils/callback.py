@@ -1,3 +1,5 @@
+from loguru import logger
+
 def on_pretrain_routine_start(trainer):
     """Called before the pretraining routine starts."""
     pass
@@ -15,7 +17,7 @@ def on_train_start(trainer):
 
 def on_train_epoch_start(trainer):
     """Called at the start of each training epoch."""
-    pass
+    logger.info(f"Epoch {trainer.epoch + 1} - Train:")
 
 
 def on_train_batch_start(trainer):

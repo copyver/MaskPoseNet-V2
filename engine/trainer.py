@@ -39,6 +39,7 @@ class BaseTrainer:
         self.cfg = cfg
         self.callbacks = callbacks
         self.is_train = self.cfg.IS_TRAIN
+        self.half = self.cfg.SOLVERS.HALF
         self.device = select_device(device=cfg.SOLVERS.DEVICE, batch=cfg.TRAIN_DATA.BATCH_SIZE)
         self.resume = self.cfg.SOLVERS.get("RESUME", None)
         self.validator = None
@@ -266,11 +267,12 @@ class BaseTrainer:
             {
                 "epoch": self.epoch + 1,
                 "best_fitness": self.best_fitness,
-                "model": deepcopy(self.model),
+                "model": deepcopy(self.model.state_dict()),
                 "optimizer": convert_optimizer_state_dict_to_fp16(deepcopy(self.optimizer.state_dict())),
                 "train_args": vars(self.cfg),  # save as dict
                 "train_metrics": {**self.metrics, **{"fitness": self.fitness}},
                 "train_results": self.read_results_csv(),
+                "class_names": self.train_dataset.class_names,
                 "date": datetime.now().isoformat(),
             },
             buffer,
@@ -299,10 +301,10 @@ class BaseTrainer:
         for f in self.last, self.best:
             if f.exists():
                 if f is self.last:
-                    ckpt = strip_optimizer(f)
+                    ckpt = strip_optimizer(f, to_half=self.half)
                 elif f is self.best:
                     k = "train_results"  # update best.pt train_metrics from last.pt
-                    strip_optimizer(f, updates={k: ckpt[k]} if k in ckpt else None)
+                    strip_optimizer(f, to_half=self.half, updates={k: ckpt[k]} if k in ckpt else None)
                     logger.info(f"\nValidating {f}...")
                     self.validator.plots = self.cfg.SOLVERS.PLOTS
                     self.metrics = self.validator(model=f)
