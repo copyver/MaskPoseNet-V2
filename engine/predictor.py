@@ -4,8 +4,6 @@ from pathlib import Path
 
 import torch
 
-from utils import get_override_cfg
-
 
 class BasePredictor:
     """
@@ -40,6 +38,7 @@ class BasePredictor:
         self.model = None
         self.imgsz = None
         self.device = None
+        self.class_names = None
         self.dataset = None
         self.results = None
         self.callbacks = _callbacks

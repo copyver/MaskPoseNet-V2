@@ -28,11 +28,9 @@ class PoseValidator(BaseValidator):
         self.training = trainer is not None
         if self.training:
             self.device = trainer.device
-            # force FP16 val during training
-            self.cfg.HALF = self.device.type != "cpu" and trainer.amp
+            self.cfg.HALF = self.device.type != "cpu" and trainer.amp  # force FP16 val during training
             model = trainer.model
             model = model.half() if self.cfg.HALF else model.float()
-            # self.model = model
             self.loss = torch.zeros_like(trainer.loss_items, device=trainer.device)
             self.cfg.SOLVERS.PLOTS &= trainer.stopper.possible_stop or (trainer.epoch == trainer.epochs - 1)
             model.eval()
@@ -129,11 +127,20 @@ class PoseValidator(BaseValidator):
             raise TypeError(f"Unsupported type for batch: {type(batch)}")
 
     def process(self, model, batch):
-        obj = batch['obj'][0].cpu().numpy()
-        all_tem, all_tem_pts, all_tem_choose = self.dataset.get_all_templates(obj, self.device)
-        dense_po, dense_fo = model.feature_extraction.get_obj_feats(all_tem, all_tem_pts, all_tem_choose)
-        batch['dense_po'] = dense_po
-        batch['dense_fo'] = dense_fo
+        objs = batch['obj'].cpu().numpy()
+        cls_names = [self.dataset.class_names[obj] for obj in objs]
+        all_dense_po = []
+        all_dense_fo = []
+        for cls_name in cls_names:
+            tem, tem_pts, tem_choose = self.dataset.get_all_templates(cls_name, self.device)
+            dense_po, dense_fo = model.feature_extraction.get_obj_feats(tem, tem_pts, tem_choose)
+            all_dense_po.append(dense_po.squeeze(0))
+            all_dense_fo.append(dense_fo.squeeze(0))
+
+        batch_dense_po = torch.stack(all_dense_po, dim=0)  # [batch, ...]
+        batch_dense_fo = torch.stack(all_dense_fo, dim=0)  # [batch, ...]
+        batch['dense_po'] = batch_dense_po
+        batch['dense_fo'] = batch_dense_fo
         end_points = model(batch)
 
         return end_points

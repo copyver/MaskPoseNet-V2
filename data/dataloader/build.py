@@ -1,12 +1,12 @@
-import torch
 import os
-from torch.utils.data import dataloader, distributed
-import numpy as np
 import random
+
+import numpy as np
+import torch
+from torch.utils.data import dataloader, distributed
+
 from utils import PIN_MEMORY
 from utils import RANK
-from pathlib import Path
-from data.dataset.data_utils import IMG_FORMATS, VID_FORMATS
 
 
 class InfiniteDataLoader(dataloader.DataLoader):
@@ -60,7 +60,7 @@ class _RepeatSampler:
 
 def seed_worker(worker_id):  # noqa
     """Set dataloader worker seed https://pytorch.org/docs/stable/notes/randomness.html#dataloader."""
-    worker_seed = torch.initial_seed() % 2**32
+    worker_seed = torch.initial_seed() % 2 ** 32
     np.random.seed(worker_seed)
     random.seed(worker_seed)
 

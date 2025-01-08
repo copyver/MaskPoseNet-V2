@@ -124,3 +124,27 @@ def check_version(
         if verbose:
             logger.warning(warning)
     return result
+
+
+def check_imgsz(imgsz, stride: int = 16):
+    """
+        Verify image size is a multiple of the given stride in each dimension. If the image size is not a multiple of the
+        stride, update it to the nearest multiple of the stride that is greater than or equal to the given floor value.
+
+        Args:
+            imgsz (int | cList[int]): Image size.
+            stride (int): Stride value.
+
+        Returns:
+            int: Updated image size.
+    """
+    if isinstance(imgsz, int):  # integer i.e. img_size=640
+        new_size = imgsz
+    elif isinstance(imgsz, list):  # list i.e. img_size=[640, 480]
+        new_size = min(imgsz)
+    else:  # tuple i.e. img_size=(640, 480)
+        new_size = min(imgsz[0], imgsz[1])
+    if new_size % stride != 0:
+        new_size = (new_size - (new_size % stride)) + stride
+        return new_size
+    return new_size

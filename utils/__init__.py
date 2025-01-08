@@ -87,7 +87,7 @@ def remove_colors(message):
 
 def logger_format_function(record):
     """
-    自定义格式化函数，移除 ANSI 转义字符。
+`   格式化函数，移除 ANSI 转义字符。
 
     Args:
         record (dict): Loguru 的日志记录。
@@ -100,10 +100,12 @@ def logger_format_function(record):
 
 
 def yaml_model_load(path):
-    """Load a model config from a YAML file."""
-    d = yaml_load(path)  # model dict
-    d.yaml_file = str(path)
-    return d
+    """
+    Load a model config from a YAML file.
+    """
+    dict_ = yaml_load(path)  # model dict
+    dict_.YAML_FILE = str(path)
+    return dict_
 
 
 def yaml_load(file="base.yaml"):
@@ -383,6 +385,6 @@ def get_ubuntu_version():
 
 
 if __name__ == "__main__":
-    path = "../cfg/base.yaml"
+    path = "../cfg/indus.yaml"
     d = yaml_model_load(path)
     print(d)

@@ -8,6 +8,7 @@ import torch.nn as nn
 from easydict import EasyDict as edict
 from loguru import logger
 
+from cfg import get_cfg
 from engine import PoseTrainer, PosePredictor, PoseValidator, SegTrainer, SegPredictor, SegValidator
 from models import PoseModel, SegModel
 from nn.tasks import attempt_load_one_weight
@@ -15,7 +16,6 @@ from utils import yaml_model_load, RANK
 from utils.callback import DefaultCallbacks
 from utils.results import Results
 from utils.torch_utils import print_model_summary
-from cfg import get_cfg
 
 
 class Model(nn.Module):
@@ -63,7 +63,7 @@ class Model(nn.Module):
         self.cfg = cfg_dict
         self.task = task
         self.model = self._smart_load("model")(cfg_dict.POSE_MODEL)  # build model
-        print_model_summary(self.model)
+        print_model_summary(self.model, verbose)
 
     def _load(self, weights: str, task=None) -> None:
         """
@@ -93,14 +93,25 @@ class Model(nn.Module):
             logger.info(self.ckpt['train_args'].keys())
         else:
             raise ValueError(f"Unsupported weights file '{weights}'")
-        self.model_name = weights
 
     def train(self, trainer=None, **kwargs):
-        self._check_is_pytorch_model()
+        """
+        Trains the model using the specified dataset and training configuration.
 
+
+        Args:
+            trainer (BaseTrainer | None): Custom trainer instance for model training. If None, uses default.
+            **kwargs (Any): Arbitrary keyword arguments for training configuration. Common options include:
+                EPOCHS (int): Number of training epochs.
+                DEVICE (str): Device to run training on (e.g., 'cuda', 'cpu').
+        """
+
+        self._check_is_pytorch_model()
         self.cfg.IS_TRAIN = True
-        if self.cfg.get("RESUME"):
-            self.cfg.RESUME = self.ckpt_path
+        self.cfg.SOLVERS.update(kwargs)
+        if self.cfg.SOLVERS.get("RESUME") and self.cfg.SOLVERS.RESUME:
+            # Todo: resume training
+            pass
 
         self.trainer = (trainer or self._smart_load("trainer"))(cfg=self.cfg, model=self.model,
                                                                 callbacks=DefaultCallbacks)
@@ -134,7 +145,7 @@ class Model(nn.Module):
             stream (bool): If True, treats the input source as a continuous stream for predictions.
             predictor (BasePredictor | None): An instance of a custom predictor class for making predictions.
                 If None, the method uses a default predictor.
-            **kwargs (Any): Additional keyword arguments for configuring the prediction process.
+
 
         Returns:
             (List[ultralytics.engine.results.Results]): A list of prediction results, each encapsulated in a
@@ -171,17 +182,6 @@ class Model(nn.Module):
         This method facilitates the export of the model to various formats (e.g., ONNX, TorchScript) for deployment
         purposes. It uses the 'Exporter' class for the export process, combining model-specific overrides, method
         defaults, and any additional arguments provided.
-
-        Args:
-            **kwargs (Dict): Arbitrary keyword arguments to customize the export process. These are combined with
-                the model's overrides and method defaults. Common arguments include:
-                format (str): Export format (e.g., 'onnx', 'engine', 'coreml').
-                half (bool): Export model in half-precision.
-                int8 (bool): Export model in int8 precision.
-                device (str): Device to run the export on.
-                workspace (int): Maximum memory workspace size for TensorRT engines.
-                nms (bool): Add Non-Maximum Suppression (NMS) module to model.
-                simplify (bool): Simplify ONNX model.
 
         Returns:
             (str): The path to the exported model file.

@@ -3,10 +3,11 @@ from engine.model import Model
 
 def main():
     model = Model(
-        model='./cfg/base.yaml',
+        model='cfg/indus.yaml',
         task='pose',
-        verbose=False
+        verbose=False,
     )
+
     model.train()
 
 

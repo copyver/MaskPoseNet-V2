@@ -36,10 +36,15 @@ class DatasetBase(data.Dataset):
                     continue
                 return train_data
         else:
-            return self.get_test_data(index)
+            while True:
+                test_data = self.get_test_data(index)
+                if test_data is None:
+                    index = self._rand_another(index)
+                    continue
+                return test_data
 
     def __len__(self):
-        return self.num_images  # Todo:modify
+        return self.num_images
 
     def _rand_another(self, idx):
         pool = [i for i in range(self.__len__()) if i != idx]

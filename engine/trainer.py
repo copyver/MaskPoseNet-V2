@@ -14,9 +14,9 @@ from torch import distributed as dist
 from torch import optim
 from tqdm import tqdm
 
-from nn.tasks import attempt_load_one_weight
 from utils import colorstr, RANK, LOCAL_RANK
 from utils import yaml_print, yaml_save, logger_format_function
+from utils.checks import check_imgsz
 from utils.log_utils import TensorBoardWriter
 from utils.torch_utils import (
     select_device,
@@ -40,6 +40,7 @@ class BaseTrainer:
         self.callbacks = callbacks
         self.is_train = self.cfg.IS_TRAIN
         self.device = select_device(device=cfg.SOLVERS.DEVICE, batch=cfg.TRAIN_DATA.BATCH_SIZE)
+        self.resume = self.cfg.SOLVERS.get("RESUME", None)
         self.validator = None
         self.metrics = None
         self.plots = {}
@@ -66,7 +67,7 @@ class BaseTrainer:
         if RANK == -1:
             yaml_print(dict(self.cfg))
 
-        # Model and Dataset
+        # Model
         self.model = model
 
         # Optimization utils init
@@ -135,7 +136,7 @@ class BaseTrainer:
             pbar = enumerate(self.train_loader)
 
             if RANK in {-1, 0}:
-                logger.info(self.progress_string())  # Todo: add function
+                logger.info(self.progress_string())
                 pbar = tqdm(enumerate(self.train_loader), total=nb)
 
             self.tloss = None
@@ -263,7 +264,7 @@ class BaseTrainer:
         buffer = io.BytesIO()
         torch.save(
             {
-                "epoch": self.epoch,
+                "epoch": self.epoch + 1,
                 "best_fitness": self.best_fitness,
                 "model": deepcopy(self.model),
                 "optimizer": convert_optimizer_state_dict_to_fp16(deepcopy(self.optimizer.state_dict())),
@@ -281,9 +282,7 @@ class BaseTrainer:
         if self.best_fitness == self.fitness:
             self.best.write_bytes(serialized_ckpt)  # save best.pt
         if (self.save_epoch_freq > 0) and (self.epoch % self.save_epoch_freq == 0):
-            (self.checkpoint_dir / f"epoch{self.epoch}.pt").write_bytes(serialized_ckpt)  # save epoch, i.e. 'epoch3.pt'
-        # if self.cfg.close_mosaic and self.epoch == (self.epochs - self.cfg.close_mosaic - 1):
-        #    (self.wdir / "last_mosaic.pt").write_bytes(serialized_ckpt)  # save mosaic checkpoint
+            (self.checkpoint_dir / f"epoch{self.epoch + 1}.pt").write_bytes(serialized_ckpt)
 
     def read_results_csv(self):
         """Read results.csv into a dict using pandas."""
@@ -365,9 +364,8 @@ class BaseTrainer:
         # self.run_callbacks("on_pretrain_routine_start")
         ckpt = self.setup_model()
         self.model = self.model.to(self.device)
-        # self.set_model_attributes
 
-        self.loss_function = self._set_up_loss()
+        self.loss_function = self._set_up_loss().to(self.device)
 
         # Freeze Layers   Todo: add freeze layer
         freeze_list = (
@@ -410,6 +408,9 @@ class BaseTrainer:
         )
 
         # Check imgsz  Todo: add img size check
+        self.img_size = check_imgsz(self.cfg.TRAIN_DATA.IMG_SIZE, stride=16)
+        self.cfg.TRAIN_DATA.IMG_SIZE = self.img_size
+        self.cfg.TEST_DATA.IMG_SIZE = self.img_size
 
         # Dataloaders
         batch_size = self.batch_size // max(world_size, 1)
@@ -449,19 +450,11 @@ class BaseTrainer:
         logger.info(f"Start training from epoch {self.start_epoch}")
 
     def setup_model(self):
-        """Load/create/download model for any task."""
+        """Load/create model for any task."""
         if isinstance(self.model, torch.nn.Module):  # if model is loaded beforehand. No setup needed
-            return
-
-        cfg, weights = self.model, None
-        ckpt = None
-        if str(self.model).endswith(".pt"):
-            weights, ckpt = attempt_load_one_weight(self.model)
-            cfg = weights.yaml
-        elif isinstance(self.cfg.SOLVERS.PRETRAINED, (str, Path)):
-            weights, _ = attempt_load_one_weight(self.cfg.PRETRAINED)
-        # self.model = self.get_model(cfg=cfg, weights=weights, verbose=RANK == -1)  # calls Model(cfg, weights)
-        return ckpt
+            return None
+        else:
+            raise ValueError("Model is not loaded")  # Todo: add model setup
 
     def build_optimizer(self, model, name="auto", lr=0.001, momentum=0.9, decay=1e-5, iterations=1e5):
         """
@@ -555,7 +548,7 @@ class BaseTrainer:
             self.lf = one_cycle(1, self.cfg.LR_SCHEDULER.LRF, self.epochs)  # cosine 1->hyp['lrf']
         else:
             self.lf = lambda x: max(1 - x / self.epochs, 0) * (
-                        1.0 - self.cfg.LR_SCHEDULER.LRF) + self.cfg.LR_SCHEDULER.LRF  # linear
+                    1.0 - self.cfg.LR_SCHEDULER.LRF) + self.cfg.LR_SCHEDULER.LRF  # linear
         self.scheduler = optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=self.lf)
 
     def get_dataset(self, rank=0, is_train=True):

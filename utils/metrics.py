@@ -265,7 +265,10 @@ class PoseMetric(SimpleClass):
                 - add (np.ndarray): ADD errors
                 - ps (np.ndarray): predicted pose scores
         """
-        self.re, self.te, self.add, self.ps = results
+        self.re.append(results[0])
+        self.te.append(results[1])
+        self.add.append(results[2])
+        self.ps.append(results[3])
 
     def fitness(self):
         """
@@ -279,8 +282,7 @@ class PoseMetric(SimpleClass):
         mean_te = np.mean(self.te)
         mean_add = np.mean(self.add)
         mean_ps = np.mean(self.ps) if len(self.ps) else 0.0
-        # Example: fitness = mean_ps - (mean_re + mean_te + mean_add)
-        return mean_ps - (mean_re + mean_te + mean_add)
+        return mean_ps - (0.01 * mean_re + mean_te + mean_add)
 
 
 class PoseMetrics(SimpleClass):

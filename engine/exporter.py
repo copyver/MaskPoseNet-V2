@@ -29,34 +29,29 @@ TensorFlow.js:
 
 import gc
 import json
-import os
-import shutil
-import subprocess
 import time
 import warnings
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
-from utils import get_default_args
-import numpy as np
+
 import torch
-from utils.ops import Profile
 from loguru import logger
-from utils.files import file_size
-from utils.torch_utils import smart_inference_mode, select_device, get_latest_opset
-from models.pose import get_default_tensor, get_default_input_shape
-from utils import __version__, colorstr, LINUX
-from utils.checks import check_version
+
 from data.dataloader.build import build_dataloader
 from data.dataset.posenet_dataset import PoseNetDataset
+from models.pose import get_default_tensor, get_default_input_shape
+from utils import __version__, colorstr
+from utils import get_default_args
+from utils.checks import check_version
+from utils.files import file_size
+from utils.ops import Profile
+from utils.torch_utils import smart_inference_mode, select_device, get_latest_opset
 
 
 def export_formats():
     x = [
         ["PyTorch", "-", ".pt", True, True],
-        ["TorchScript", "torchscript", ".torchscript", True, True],
-        ["ONNX", "onnx", ".onnx", True, True],
-        ["TensorRT", "engine", ".engine", False, True],
     ]
     return dict(zip(["Format", "Argument", "Suffix", "CPU", "GPU"], zip(*x)))
 
@@ -304,7 +299,6 @@ class Exporter:
         onnx.save(model_onnx, f)
         return f, model_onnx
 
-
     @try_export
     def export_engine(self, prefix=colorstr("TensorRT:")):
         """YOLO TensorRT export https://developer.nvidia.com/tensorrt."""
@@ -372,10 +366,10 @@ class Exporter:
 
             class EngineCalibrator(trt.IInt8Calibrator):
                 def __init__(
-                    self,
-                    dataset,  # ultralytics.data.build.InfiniteDataLoader
-                    batch: int,
-                    cache: str = "",
+                        self,
+                        dataset,  # ultralytics.data.build.InfiniteDataLoader
+                        batch: int,
+                        cache: str = "",
                 ) -> None:
                     trt.IInt8Calibrator.__init__(self)
                     self.dataset = dataset
@@ -446,4 +440,3 @@ class Exporter:
         """Execute all callbacks for a given event."""
         for callback in self.callbacks.get(event, []):
             callback(self)
-

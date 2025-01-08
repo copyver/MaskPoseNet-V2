@@ -1,11 +1,12 @@
+from copy import copy
+
 import torch
 
+from data.dataloader.build import build_dataloader
 from data.dataset.posenet_dataset import PoseNetDataset
 from engine import BaseTrainer
 from models.pose.loss_utils import Loss
 from utils.torch_utils import torch_distributed_zero_first
-from data.dataloader.build import build_dataloader
-from copy import copy
 
 
 class PoseTrainer(BaseTrainer):
@@ -16,7 +17,7 @@ class PoseTrainer(BaseTrainer):
         return PoseNetDataset(cfg, is_train)
 
     def _set_up_loss(self):
-        return Loss().cuda()
+        return Loss()
 
     def progress_string(self):
         """Returns a formatted string of training progress with epoch, GPU memory, loss, instances and size."""

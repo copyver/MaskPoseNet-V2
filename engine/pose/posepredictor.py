@@ -14,17 +14,18 @@ from utils.visualize import visualize_pose_bbox
 
 
 class PosePredictor(BasePredictor):
-    def __init__(self, cfg=None, save_dir=None, verbose=False, _callbacks=None, **kwargs):
-        super(PosePredictor, self).__init__(cfg, save_dir, verbose, _callbacks, **kwargs)
+    def __init__(self, cfg=None, save_dir=None, verbose=False, _callbacks=None):
+        super(PosePredictor, self).__init__(cfg, save_dir, verbose, _callbacks)
 
     def setup_source(self, source):
         """Sets up source and inference mode."""
-        image, depth_image, seg_mask, obj, camera_k = (
+        image, depth_image, seg_mask, obj, camera_k, class_names = (
             source["image"],
             source["depth_image"],
             source["seg_mask"],
             source["obj"],
-            source["camera_k"]
+            source["camera_k"],
+            source["class_names"],
         )
         self.dataset, image, depth_image, mask, whole_model_points = load_pose_inference_source(
             image=image,
@@ -33,7 +34,9 @@ class PosePredictor(BasePredictor):
             obj=obj,
             camera_k=camera_k,
             cfg=self.cfg.TEST_DATA,
+            class_names=class_names,
         )
+        self.class_names = class_names
         source['image'] = image
         source['depth_image'] = depth_image
         source['seg_mask'] = mask
@@ -134,12 +137,13 @@ class PosePredictor(BasePredictor):
             raise TypeError(f"Unsupported type for batch: {type(batch)}")
 
     def inference(self, batch):
-        obj = batch['obj'].cpu().numpy()
+        objs = batch['obj'].cpu().numpy()
+        cls_names = [self.class_names[obj] for obj in objs]
         all_dense_po = []
         all_dense_fo = []
 
-        for o in obj:
-            all_tem, all_tem_pts, all_tem_choose = get_all_templates(self.cfg.TEST_DATA, o, self.device)
+        for cls_name in cls_names:
+            all_tem, all_tem_pts, all_tem_choose = get_all_templates(self.cfg.TEST_DATA, cls_name, self.device)
 
             # 调用特征提取函数
             dense_po, dense_fo = self.model.model.feature_extraction.get_obj_feats(
@@ -159,7 +163,6 @@ class PosePredictor(BasePredictor):
         return end_points
 
     def postprocess(self, preds):
-        # Todo:
         pred_Rs = []
         pred_Ts = []
         pred_scores = []

@@ -6,7 +6,6 @@ import numpy as np
 import torch
 import torchvision.transforms as transforms
 import trimesh
-from albumentations.core.transforms_interface import ImageOnlyTransform
 from loguru import logger
 
 from data.dataset.base_dataset import DatasetBase
@@ -21,19 +20,6 @@ from data.dataset.data_utils import (
     get_random_rotation,
     get_bbox,
 )
-
-
-class AdditiveGaussianNoise(ImageOnlyTransform):
-    def __init__(self, scale=10.0, per_channel=False, always_apply=False, p=0.5):
-        super(AdditiveGaussianNoise, self).__init__(always_apply, p)
-        self.scale = scale
-        self.per_channel = per_channel
-
-    def apply(self, img, **params):
-        noise = np.random.normal(0, self.scale, img.shape)
-        if self.per_channel and img.ndim == 3:
-            noise = noise[..., np.newaxis]
-        return np.clip(img + noise, 0, 255).astype(np.uint8)
 
 
 class PoseNetDataset(DatasetBase):
@@ -133,14 +119,14 @@ class PoseNetDataset(DatasetBase):
             return self.scene_camera_info[image_id_str]['cam_K']
         return None
 
-    def get_all_templates(self, category_id, device):
+    def get_all_templates(self, cls_name, device):
         n_template_view = self.n_template_view
         all_tem_rgb = [[] for i in range(n_template_view)]
         all_tem_choose = [[] for i in range(n_template_view)]
         all_tem_pts = [[] for i in range(n_template_view)]
 
         for i in range(n_template_view):
-            tem_rgb, tem_choose, tem_pts = self.get_template(self.templates_dir, category_id, i)
+            tem_rgb, tem_choose, tem_pts = self.get_template(self.templates_dir, cls_name, i)
             all_tem_rgb[i].append(torch.FloatTensor(tem_rgb))
             all_tem_choose[i].append(torch.IntTensor(tem_choose).long())
             all_tem_pts[i].append(torch.FloatTensor(tem_pts))
@@ -152,11 +138,10 @@ class PoseNetDataset(DatasetBase):
 
         return all_tem_rgb, all_tem_pts, all_tem_choose
 
-    def get_template(self, file_base, category_id, tem_index=0):
-        category_id_str = f"obj_{int(category_id):02d}"
-        rgb_path = os.path.join(file_base, category_id_str, f'rgb_{tem_index}.png')
-        xyz_path = os.path.join(file_base, category_id_str, f'xyz_{tem_index}.npy')
-        mask_path = os.path.join(file_base, category_id_str, f'mask_{tem_index}.png')
+    def get_template(self, file_base, cls_name, tem_index=0):
+        rgb_path = os.path.join(file_base, cls_name, f'rgb_{tem_index}.png')
+        xyz_path = os.path.join(file_base, cls_name, f'xyz_{tem_index}.npy')
+        mask_path = os.path.join(file_base, cls_name, f'mask_{tem_index}.png')
 
         mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE) == 255
         bbox = get_bbox(mask)
@@ -183,14 +168,14 @@ class PoseNetDataset(DatasetBase):
 
         xyz = np.load(xyz_path).astype(np.float32)
         xyz = convert_blender_to_pyrender(xyz)[y1:y2, x1:x2, :]
+        # xyz = xyz[y1:y2, x1:x2, :]
         xyz = xyz.reshape((-1, 3))[choose, :]
         choose = get_resize_rgb_choose(choose, [y1, y2, x1, x2], self.img_size)
 
         return rgb, choose, xyz
 
-    def get_models(self, file_base, category_id):
-        category_id_str = f"obj_{int(category_id):02d}.obj"
-        mesh_path = os.path.join(file_base, category_id_str)
+    def get_models(self, file_base, cls_name):
+        mesh_path = os.path.join(file_base, cls_name + '.obj')
         mesh = trimesh.load(mesh_path, force='mesh')
         model_pts, _ = trimesh.sample.sample_surface(mesh, self.n_sample_model_point)
         return model_pts.astype(np.float32)
@@ -204,7 +189,8 @@ class PoseNetDataset(DatasetBase):
 
         # 随机选择一个有效标注
         valid_annotation = np.random.choice(annotations)
-        category_id = valid_annotation['category_id']
+        cls_id = valid_annotation['category_id']
+        cls_name = self.class_names[cls_id]
         annotation_id = valid_annotation['id']
 
         # 加载位姿信息（旋转矩阵R和平移向量t
@@ -219,8 +205,8 @@ class PoseNetDataset(DatasetBase):
         camera_k = np.array(camera_k).reshape(3, 3).astype(np.float32)
 
         # 加载模板数据（两种不同视角）
-        tem1_rgb, tem1_choose, tem1_pts = self.get_template(self.templates_dir, category_id, 1)
-        tem2_rgb, tem2_choose, tem2_pts = self.get_template(self.templates_dir, category_id, 35)
+        tem1_rgb, tem1_choose, tem1_pts = self.get_template(self.templates_dir, cls_name, 6)
+        tem2_rgb, tem2_choose, tem2_pts = self.get_template(self.templates_dir, cls_name, 30)
         if tem1_rgb is None or tem2_rgb is None:
             return None
 
@@ -240,20 +226,21 @@ class PoseNetDataset(DatasetBase):
 
         # 加载深度图数据
         depth_path = self.image_info[image_id]['depth_path']
-        depth = load_depth_image(depth_path)
-        depth = depth * self.depth_scale / 1000.0
+        depth = load_depth_image(depth_path).astype(np.float32)
+        depth = depth * self.depth_scale / 1000.0 + 0.085
         pts = get_point_cloud_from_depth(depth, camera_k, [y1, y2, x1, x2])
         pts = pts.reshape(-1, 3)[choose, :]
 
         # 将点云转换到目标物体的坐标系
         target_pts = (pts - target_t[None, :]) @ target_R
         tem_pts = np.concatenate([tem1_pts, tem2_pts], axis=0)
+        # visualize_point_cloud(target_pts, tem_pts)
         radius = np.max(np.linalg.norm(tem_pts, axis=1))
         target_radius = np.linalg.norm(target_pts, axis=1)
         flag = target_radius < radius * 1.2
         pts = pts[flag]
         choose = choose[flag]
-        if len(choose) < 32:
+        if len(choose) < 500:
             return None
         if len(choose) <= self.n_sample_observed_point:
             choose_idx = np.random.choice(np.arange(len(choose)), self.n_sample_observed_point)
@@ -312,7 +299,8 @@ class PoseNetDataset(DatasetBase):
 
         # 随机选择一个有效标注
         valid_annotation = np.random.choice(annotations)
-        category_id = valid_annotation['category_id']
+        cls_id = valid_annotation['category_id']
+        cls_name = self.class_names[cls_id]
         annotation_id = valid_annotation['id']
 
         # 加载位姿信息（旋转矩阵R和平移向量t)
@@ -327,7 +315,7 @@ class PoseNetDataset(DatasetBase):
         camera_k = np.array(camera_k).reshape(3, 3).astype(np.float32)
 
         # 加载模型点云数据
-        model_points = self.get_models(self.model_dir, category_id)
+        model_points = self.get_models(self.model_dir, cls_name)
         if model_points is None:
             return None
 
@@ -343,8 +331,8 @@ class PoseNetDataset(DatasetBase):
 
         # 加载深度图数据
         depth_path = self.image_info[image_id]['depth_path']
-        depth = load_depth_image(depth_path)
-        depth = depth * self.depth_scale / 1000.0
+        depth = load_depth_image(depth_path).astype(np.float32)
+        depth = depth * self.depth_scale / 1000.0 + 0.085
         pts = get_point_cloud_from_depth(depth, camera_k, [y1, y2, x1, x2])
         pts = pts.reshape(-1, 3)[choose, :]
 
@@ -371,7 +359,8 @@ class PoseNetDataset(DatasetBase):
             'rgb': torch.FloatTensor(rgb),
             'rgb_choose': torch.IntTensor(rgb_choose).long(),
             'model': torch.FloatTensor(model_points),
-            'obj': torch.IntTensor([category_id]).long(),
+            # 'obj': torch.IntTensor([cls_id]).long(),
+            'obj': torch.tensor(cls_id, dtype=torch.long),
             'translation_label': torch.FloatTensor(target_t),
             'rotation_label': torch.FloatTensor(target_R),
         }
@@ -384,7 +373,7 @@ if __name__ == "__main__":
     import yaml
     from data.dataloader.build import build_dataloader
 
-    with open('../../cfg/base.yaml', 'r') as f:
+    with open('../../cfg/indus.yaml', 'r') as f:
         cfg_dict = yaml.safe_load(f)
     cfg = edict(cfg_dict)
 
@@ -433,25 +422,26 @@ if __name__ == "__main__":
             break
 
 
-    def test_point_cloud():
+    def test_point_cloud(is_train: bool = True):
         from utils.visualize import visualize_point_cloud
-        train_dataset = PoseNetDataset(cfg.TRAIN_DATA, is_train=True)
-        print(f"数据集加载完成，共有 {len(train_dataset)} 张训练图片")
+        if is_train:
+            dataset = PoseNetDataset(cfg.TRAIN_DATA, is_train=True)
 
-        index = random.randint(0, len(train_dataset) - 1)
-        print(f"随机选取样本索引: {index}")
+            print(f"数据集加载完成，共有 {len(dataset)} 张训练图片")
+            index = random.randint(0, len(dataset) - 1)
+            print(f"随机选取样本索引: {index}")
 
-        train_data = train_dataset.get_train_data(index)
-        if train_data is None:
-            print(f"样本 {index} 加载失败，可能数据不足或标注缺失")
-        else:
-            pts = train_data['pts'].cpu().numpy()
-            rgb = train_data['rgb'].cpu().numpy()
-            target_t = train_data['translation_label'].cpu().numpy().astype(np.float64)
-            target_R = train_data['rotation_label'].cpu().numpy().astype(np.float64)
+            data = dataset.get_train_data(index)
 
-            tem1_pts = train_data['tem1_pts'].cpu().numpy().astype(np.float64)
-            tem2_pts = train_data['tem2_pts'].cpu().numpy().astype(np.float64)
+            if data is None:
+                print(f"样本 {index} 加载失败，可能数据不足或标注缺失")
+
+            pts = data['pts'].cpu().numpy()
+            target_t = data['translation_label'].cpu().numpy().astype(np.float64)
+            target_R = data['rotation_label'].cpu().numpy().astype(np.float64)
+
+            tem1_pts = data['tem1_pts'].cpu().numpy().astype(np.float64)
+            tem2_pts = data['tem2_pts'].cpu().numpy().astype(np.float64)
 
             # 使用给定的旋转和平移对 pts 进行变换
             target_pts = (pts - target_t[None, :]) @ target_R
@@ -460,6 +450,28 @@ if __name__ == "__main__":
             tem_pts = np.concatenate([tem1_pts, tem2_pts], axis=0)
             visualize_point_cloud(target_pts, tem_pts)
 
+        else:
+            dataset = PoseNetDataset(cfg.TEST_DATA, is_train=False)
 
-    test_point_cloud()
+            print(f"数据集加载完成，共有 {len(dataset)} 张训练图片")
+            index = random.randint(0, len(dataset) - 1)
+            print(f"随机选取样本索引: {index}")
+
+            data = dataset.get_test_data(index)
+
+            if data is None:
+                print(f"样本 {index} 加载失败，可能数据不足或标注缺失")
+
+            pts = data['pts'].cpu().numpy()
+            target_t = data['translation_label'].cpu().numpy().astype(np.float64)
+            target_R = data['rotation_label'].cpu().numpy().astype(np.float64)
+            model_pts = data['model'].cpu().numpy().astype(np.float64)
+
+            # 使用给定的旋转和平移对 pts 进行变换
+            target_pts = (pts - target_t[None, :]) @ target_R
+
+            visualize_point_cloud(target_pts, model_pts)
+
+
+    test_point_cloud(is_train=False)
     # test_posenet_dataset()

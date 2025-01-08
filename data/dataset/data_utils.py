@@ -213,9 +213,8 @@ def get_random_rotation():
     return rand_rotation
 
 
-def get_models(file_base, category_id, n_sample):
-    category_id_str = f"obj_{int(category_id):02d}.obj"
-    mesh_path = os.path.join(file_base, category_id_str)
+def get_models(file_base, cls_name, n_sample):
+    mesh_path = os.path.join(file_base, cls_name + '.obj')
     mesh = trimesh.load(mesh_path, force='mesh')
     model_pts, _ = trimesh.sample.sample_surface(mesh, n_sample)
     return model_pts.astype(np.float32)
@@ -227,12 +226,11 @@ def transform(image):
                                                     std=[0.229, 0.224, 0.225])])(image)
 
 
-def get_template(cfg, category_id, tem_index=0):
+def get_template(cfg, cls_name, tem_index=0):
     file_base = cfg.TEMPLATE_DIR
-    category_id_str = f"obj_{int(category_id):02d}"
-    rgb_path = os.path.join(file_base, category_id_str, f'rgb_{tem_index}.png')
-    xyz_path = os.path.join(file_base, category_id_str, f'xyz_{tem_index}.npy')
-    mask_path = os.path.join(file_base, category_id_str, f'mask_{tem_index}.png')
+    rgb_path = os.path.join(file_base, cls_name, f'rgb_{tem_index}.png')
+    xyz_path = os.path.join(file_base, cls_name, f'xyz_{tem_index}.npy')
+    mask_path = os.path.join(file_base, cls_name, f'mask_{tem_index}.png')
 
     mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE) == 255
     bbox = get_bbox(mask)
@@ -263,14 +261,14 @@ def get_template(cfg, category_id, tem_index=0):
     return rgb, choose, xyz
 
 
-def get_all_templates(cfg, category_id, device):
+def get_all_templates(cfg, cls_name, device):
     n_template_view = cfg.N_TEMPLATE_VIEW
     all_tem_rgb = [[] for i in range(n_template_view)]
     all_tem_choose = [[] for i in range(n_template_view)]
     all_tem_pts = [[] for i in range(n_template_view)]
 
     for i in range(n_template_view):
-        tem_rgb, tem_choose, tem_pts = get_template(cfg, category_id, i)
+        tem_rgb, tem_choose, tem_pts = get_template(cfg, cls_name, i)
         all_tem_rgb[i].append(torch.FloatTensor(tem_rgb))
         all_tem_choose[i].append(torch.IntTensor(tem_choose).long())
         all_tem_pts[i].append(torch.FloatTensor(tem_pts))
@@ -293,7 +291,7 @@ def load_image_if_path(input_data, flags=cv2.IMREAD_COLOR):
     return input_data
 
 
-def load_pose_inference_source(image, depth_image, mask, obj, camera_k, cfg, model_dir=None):
+def load_pose_inference_source(image, depth_image, mask, obj, camera_k, cfg, class_names, model_dir=None):
     """
     Loads data sources for pose estimation, normalizes the input image, depth map, and mask,
     and generates a dictionary containing point clouds, RGB data, model points, and other relevant information.
@@ -351,14 +349,13 @@ def load_pose_inference_source(image, depth_image, mask, obj, camera_k, cfg, mod
     # 相机内参处理
     camera_k = np.array(camera_k, dtype=np.float32).reshape(3, 3)
 
-    # 模型点加载
     model_dir = model_dir or Path(cfg.DATA_DIR) / cfg.MODEL_DIR
 
     # 将RGB从BGR转为RGB备用
     rgb_img = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
     # 深度归一化为米
-    depth = depth_image.astype(np.float32) * cfg.DEPTH_SCALE / 1000.0
+    depth = depth_image.astype(np.float32) * cfg.DEPTH_SCALE / 1000.0 + 0.085
 
     whole_pts = get_point_cloud_from_depth(depth, camera_k)
 
@@ -388,7 +385,9 @@ def load_pose_inference_source(image, depth_image, mask, obj, camera_k, cfg, mod
         else:
             m = m.astype(np.uint8)
 
-        model_points = get_models(model_dir, o, cfg.N_SAMPLE_MODEL_POINT)
+        # 加载模型点
+        cls_name = class_names[o]
+        model_points = get_models(model_dir, cls_name, cfg.N_SAMPLE_MODEL_POINT)
         if model_points is None:
             continue
         radius = np.max(np.linalg.norm(model_points, axis=1))

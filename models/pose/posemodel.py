@@ -20,10 +20,6 @@ class PoseModel(nn.Module):
         self.coarse_point_matching = CoarsePointMatching(cfg.COARSE_POINT_MATCHING)
         self.fine_point_matching = FinePointMatching(cfg.FINE_POINT_MATCHING)
 
-    @torch.jit.export
-    def get_obj_feats(self, tem_rgb_list, tem_pts_list, tem_choose_list, npoint):
-        return self.feature_extraction.get_obj_feats(tem_rgb_list, tem_pts_list, tem_choose_list, npoint)
-
     def forward(self, end_points):
         dense_pm, dense_fm, dense_po, dense_fo, radius = self.feature_extraction(end_points)
 
