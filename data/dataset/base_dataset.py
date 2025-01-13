@@ -69,9 +69,9 @@ class DatasetBase(data.Dataset):
             "name": class_name,
         })
 
-    def add_image(self, source, image_id, path, **kwargs):
+    def add_image(self, source, id, path, **kwargs):
         image_info = {
-            "id": image_id,
+            "id": id,
             "source": source,
             "path": path,
         }
@@ -148,10 +148,16 @@ class DatasetBase(data.Dataset):
             ids = [ann['id'] for ann in anns]
         return ids
 
-    def load_image_annotations(self, image_id):
-        return self.image_info[image_id]['annotations']
+    def load_image_annotations(self, id):
+        return self.image_info[id]['annotations']
 
     def on_epoch_end(self):
         """Shuffle the dataset at the end of each epoch."""
         if self.is_train:
             np.random.shuffle(self.image_ids)
+
+    def load_pose_Rt(self):
+        raise NotImplementedError("load_pose_Rt is not Implemented")
+
+    def load_camera_k(self):
+        raise NotImplementedError("load_camera_k is not Implemented")

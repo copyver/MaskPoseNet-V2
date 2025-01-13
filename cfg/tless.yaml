@@ -6,7 +6,7 @@ SOLVERS:
   SEED: 42
   HALF: False
   OUTPUT_DIR: 'middle_log'
-  LOGS_NAME: '0112-indus12000-train-b'
+  LOGS_NAME: '0109-tless-train-l'
   TENSORBOARD_LOGS_DIR: 'logs'
   CHECKPOINTS_DIR: 'checkpoints'
   METRIC_DIR: 'metrics'
@@ -27,7 +27,7 @@ SOLVERS:
 
 OPTIMIZER:
   TYPE: Adam
-  LR: 0.00005
+  LR: 0.0001
   MOMENTUM: 0.5
   WEIGHT_DECAY: 0.0
 
@@ -41,9 +41,9 @@ POSE_MODEL:
   COARSE_NPOINT: 196
   FINE_NPOINT: 2048
   FEATURE_EXTRACTION:
-    VIT_TYPE: VIT_BASE  # VIT_BASE, VIT_LARGE
+    VIT_TYPE: VIT_LARGE  # VIT_BASE, VIT_LARGE
     UP_TYPE: LINEAR
-    EMBED_DIM: 768   # BASE: 768, LARGE: 1024
+    EMBED_DIM: 1024   # BASE: 768, LARGE: 1024
     OUT_DIM: 256
     USE_PYRAMID_FEAT: True
     PRETRAINED: True
@@ -80,10 +80,10 @@ POSE_MODEL:
 
 
 TRAIN_DATA:
-  DATA_DIR: "/home/yhlever/DeepLearning/6D_object_pose_estimation/datasets/indus"
-  DATASET_DIR: "indus-12000t-1200v"
+  DATA_DIR: "/home/yhlever/DeepLearning/6D_object_pose_estimation/datasets/tless"
+  DATASET_DIR: "train_primesense"
   TEMPLATE_DIR: "templates"
-  DEPTH_SCALE: 5.0   # real 1.0 sim 5.0
+  DEPTH_SCALE: 0.1   # real 1.0 sim 5.0
   IMG_SIZE: 224
   N_SAMPLE_OBSERVED_POINT: 2048
   N_SAMPLE_TEMPLATE_POINT: 5000
@@ -92,7 +92,7 @@ TRAIN_DATA:
   SHIFT_RANGE: 0.01
   RGB_MASK_FLAG: True
   DILATE_MASK: True
-  BATCH_SIZE: 8
+  BATCH_SIZE: 4
   NUM_WORKERS: 8
   SHUFFLE: True
   DROP_LAST: True
@@ -101,11 +101,11 @@ TRAIN_DATA:
 
 
 TEST_DATA:
-  DATA_DIR: "/home/yhlever/DeepLearning/6D_object_pose_estimation/datasets/indus"
-  DATASET_DIR: "indus-12000t-1200v"
+  DATA_DIR: "/home/yhlever/DeepLearning/6D_object_pose_estimation/datasets/tless"
+  DATASET_DIR: "test_primesense"
   TEMPLATE_DIR: "templates"
-  MODEL_DIR: "models"
-  DEPTH_SCALE: 5.0
+  MODEL_DIR: "models_cad"
+  DEPTH_SCALE: 0.1
   IMG_SIZE: 224
   N_SAMPLE_OBSERVED_POINT: 2048
   N_SAMPLE_TEMPLATE_POINT: 5000

@@ -19,7 +19,7 @@ from engine.model import Model
 
 if __name__ == "__main__":
     model = Model(
-        model="middle_log/0108-indus100-train/checkpoints/best.pt",
+        model="middle_log/0112-indus12000-train-b/checkpoints/best.pt",
         task='pose',
         verbose=False,
         is_train=False,

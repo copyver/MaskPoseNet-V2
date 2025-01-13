@@ -50,7 +50,8 @@ def load_depth_image(depth_path):
 
 
 def load_anns(dataset_dir, subset, annotation_key):
-    assert annotation_key in ["scene_camera.json", "scene_instances_gt.json", "scene_pose_gt.json"], \
+    assert annotation_key in ["scene_camera.json", "scene_instances_gt.json", "scene_pose_gt.json", "scene_gt.json",
+                              "scene_gt_coco.json"], \
         f'Annotation file format {annotation_key} not supported.'
     annotations_file = os.path.join(dataset_dir, subset, annotation_key)
     logger.info(f'Loading {annotation_key} into memory...')

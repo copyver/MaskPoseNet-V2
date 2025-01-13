@@ -12,6 +12,8 @@ import trimesh
 import yaml
 from torchvision import transforms
 
+from utils.visualize import visualize_point_cloud
+
 DefaultArgs = {
     "MODEL_DIR": "/home/yhlever/DeepLearning/6D_object_pose_estimation/datasets/indus/models",
     "TEMPLATE_DIR": "/home/yhlever/DeepLearning/6D_object_pose_estimation/datasets/indus/templates",
@@ -524,7 +526,7 @@ class ModelPose:
 
     def __call__(self, source: Dict):
         with torch.no_grad():
-            batch, whole_model_points = self.load_pose_inference_source(
+            batch, whole_target_pts, whole_model_points = self.load_pose_inference_source(
                 image=source["image"],
                 depth_image=source["depth_image"],
                 mask=source["seg_mask"],
@@ -535,6 +537,7 @@ class ModelPose:
             batch = self.preprocess(batch)
             end_points = self.inference(batch)
             preds = self.postprocess(end_points)
+            preds["whole_src_points"] = whole_target_pts
             preds["whole_model_points"] = whole_model_points
         return preds
 
@@ -831,8 +834,9 @@ class ModelPose:
             'model': torch.stack(all_model_points, dim=0),
             'obj': torch.cat(all_obj, dim=0).long()  # obj本身是[1]的tensor，这里cat后是[batch]
         }
+        whole_target_pts = np.stack(all_pts, axis=0)
         whole_model_points = np.stack(whole_model_points, axis=0)
-        return ret_dict, whole_model_points
+        return ret_dict, whole_target_pts, whole_model_points
 
     @staticmethod
     def transform(image):
@@ -1024,16 +1028,57 @@ def visualize_pose_bbox(results):
     cv2.imwrite(save_path, img)
 
 
-def main():
-    pose_model_pt_path = "/home/yhlever/DeepLearning/MaskPoseNet-V2/middle_log/0108-indus100-train/checkpoints/best.pt"
-    device = "cuda"
+class Model:
+    def __init__(self, pose_model_path, seg_model_path, device):
+        # Build model
+        onnxsession = ort.InferenceSession(
+            seg_model_path,
+            providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
+            if ort.get_device() == "GPU" and device == "cuda"
+            else ["CPUExecutionProvider"],
+        )
+        self.seg_model = ModelSeg(onnxsession)
+        self.pose_model = ModelPose(pose_model_path, args=DefaultArgs, device=device)
 
-    onnxsession = ort.InferenceSession(
-        '/home/yhlever/DeepLearning/ultralytics/runs/segment/train5/weights/best.onnx',
-        providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
-        if ort.get_device() == "GPU"
-        else ["CPUExecutionProvider"],
-    )
+    def __call__(self, img, depth_img, camera_k, save: bool = False, vis: bool = False):
+        source = {
+            "image": img,
+            "depth_image": depth_img,
+            "camera_k": camera_k,
+        }
+
+        # Inference
+        boxes, segments, masks = self.seg_model(image, conf_threshold=0.4, iou_threshold=0.7)
+        seg_scores = [box[4] for box in boxes]
+        cls_ids = [int(box[5]) + 1 for box in boxes]  # add background class
+        mask_list = [masks[i] for i in range(masks.shape[0])]
+        if len(boxes) > 0 and save:
+            self.seg_model.draw_and_visualize(image, boxes, segments, vis=False, save=True)
+
+        source.update({
+            "seg_scores": seg_scores,
+            "cls_ids": cls_ids,
+            "seg_mask": mask_list,
+        })
+        preds = self.pose_model(source)
+        preds.update(source)
+        if save:
+            visualize_pose_bbox(preds)
+        if vis:
+            for i in range(preds["whole_src_points"].shape[0]):
+                sub_src_pts = preds["whole_src_points"][i]
+                pred_R = preds["pred_Rs"][i].reshape(3, 3).astype(np.float32)
+                pred_T = preds["pred_Ts"][i].reshape(3).astype(np.float32)
+                sub_target_pts = (sub_src_pts - pred_T[None, :]) @ pred_R
+                sub_model_pts = preds["whole_model_points"][i]
+                visualize_point_cloud(sub_target_pts, sub_model_pts)
+        return preds
+
+
+if __name__ == "__main__":
+    pose_model_pt_path = \
+        "/home/yhlever/DeepLearning/MaskPoseNet-V2/middle_log/0109-indus12000-train-l/checkpoints/best.pt"
+    seg_model_onnx_path = '/home/yhlever/DeepLearning/ultralytics/runs/segment/train5/weights/best.onnx'
     image = cv2.imread("/home/yhlever/DeepLearning/6D_object_pose_estimation/datasets/indus/indus-12000t-1200v"
                        "/val/images/color_ims/image_000512.png",
                        flags=cv2.IMREAD_COLOR)
@@ -1045,36 +1090,5 @@ def main():
         [0.0, 1039.5527733689619, 479.5612565995002, ],
         [0.0, 0.0, 1.0, ],
     ], dtype=np.float64)
-
-    source = {
-        "image": image,
-        "depth_image": depth_image,
-        "camera_k": camera_k,
-    }
-
-    # Build model
-    my_seg_model = ModelSeg(onnxsession)
-    my_pose_model = ModelPose(pose_model_pt_path, args=DefaultArgs, device=device)
-
-    # Inference
-    boxes, segments, masks = my_seg_model(image, conf_threshold=0.4, iou_threshold=0.7)
-    seg_scores = [box[4] for box in boxes]
-    cls_ids = [int(box[5]) + 1 for box in boxes]  # add background class
-    mask_list = [masks[i] for i in range(masks.shape[0])]
-
-    # Draw bboxes and polygons
-    if len(boxes) > 0:
-        my_seg_model.draw_and_visualize(image, boxes, segments, vis=False, save=True)
-
-    source.update({
-        "seg_scores": seg_scores,
-        "cls_ids": cls_ids,
-        "seg_mask": mask_list,
-    })
-    preds = my_pose_model(source)
-    preds.update(source)
-    visualize_pose_bbox(preds)
-
-
-if __name__ == "__main__":
-    main()
+    my_model = Model(pose_model_pt_path, seg_model_onnx_path, device="cuda")
+    preds = my_model(image, depth_image, camera_k, save=True)

@@ -1,14 +1,8 @@
-import os
-
 import albumentations as A
-import cv2
-import numpy as np
-import torch
-import torchvision.transforms as transforms
-import trimesh
-from loguru import logger
-
 from data.dataset.base_dataset import DatasetBase
+import os
+import torchvision.transforms as transforms
+from loguru import logger
 from data.dataset.data_utils import (
     convert_blender_to_pyrender,
     load_color_image,
@@ -20,18 +14,17 @@ from data.dataset.data_utils import (
     get_random_rotation,
     get_bbox,
 )
+import torch
+import cv2
+import numpy as np
+import trimesh
+from utils.visualize import visualize_point_cloud
 
 
-class PoseNetDataset(DatasetBase):
-    """
-    PoseNet数据集类，继承自DatasetBase。
-    该类负责加载和处理PoseNet模型所需的数据集。
-    """
-
+class TlessDataset(DatasetBase):
     def __init__(self, cfg, is_train=True):
         super().__init__(cfg, is_train)
         self.data_dir = cfg.DATA_DIR
-        # self.num_img_per_epoch = cfg.NUM_IMG_PER_EPOCH
         # self.min_visib_px = cfg.MIN_PX_COUNT_VISIB
         # self.min_visib_frac = cfg.MIN_VISIB_FRACT
         self.depth_scale = cfg.DEPTH_SCALE
@@ -44,7 +37,7 @@ class PoseNetDataset(DatasetBase):
         self.transform = transforms.Compose([transforms.ToTensor(),
                                              transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                                                   std=[0.229, 0.224, 0.225])])
-
+        self.image_len_info = {}
         if is_train:
             self.dilate_mask = cfg.DILATE_MASK
             self.shift_range = cfg.SHIFT_RANGE
@@ -71,31 +64,48 @@ class PoseNetDataset(DatasetBase):
             self.load_data("val")
 
     def load_data(self, subset: str = "train"):
-        image_dir = os.path.join(self.dataset_dir, subset, "images", "color_ims")
-        depth_dir = os.path.join(self.dataset_dir, subset, "images", "depth_ims")
-        self.scene_camera_info = load_anns(self.dataset_dir, subset, "scene_camera.json")
-        self.scene_instances_gt_info = load_anns(self.dataset_dir, subset, "scene_instances_gt.json")
-        self.scene_pose_gt_info = load_anns(self.dataset_dir, subset, "scene_pose_gt.json")
-        self.createIndex()
-        class_ids = self.getCatIds()
-        image_ids = list(self.imgs.keys())
+        """
+        遍历新数据集目录结构:
+        dataset_dir / subset / SCENE_ID / {scene_gt_coco.json, scene_camera.json, etc.}
+        depth / mask / mask_visib / rgb / ...
+        """
+        # 列出所有场景ID文件夹
+        scene_ids = [
+            d for d in os.listdir(self.dataset_dir)
+            if os.path.isdir(os.path.join(self.dataset_dir, d))
+        ]
+        logger.info(f"Found {len(scene_ids)} scenes in {self.dataset_dir}.")
 
-        # Add classes
+        # 遍历每个场景文件夹
+        for scene_id in scene_ids:
+            scene_camera_data = load_anns(self.dataset_dir, scene_id, "scene_camera.json")
+            scene_instances_gt_data = load_anns(self.dataset_dir, scene_id, "scene_gt_coco.json")
+            scene_pose_gt_data = load_anns(self.dataset_dir, scene_id, "scene_gt.json")
+
+            self.scene_camera_info.update({scene_id: scene_camera_data})
+            self.scene_instances_gt_info.update({scene_id: scene_instances_gt_data})
+            self.scene_pose_gt_info.update({scene_id: scene_pose_gt_data})
+            self.image_len_info.update({scene_id: len(scene_instances_gt_data["images"])})
+
+        cats = scene_instances_gt_data.get('categories', [])
+        class_ids = [cat['id'] for cat in cats]
         for i in class_ids:
-            self.add_class("", i, self.loadCats(i)[0]["name"])
+            self.add_class(source="tless", class_id=i, class_name=f"obj_{i:06d}")
 
-        # Add images
-        for i in image_ids:
-            image_file = self.imgs[i]['file_name']
-            self.add_image(
-                source="",
-                id=i,
-                path=os.path.join(image_dir, image_file),
-                depth_path=os.path.join(depth_dir, image_file),
-                width=self.imgs[i]["width"],
-                height=self.imgs[i]["height"],
-                annotations=self.loadAnns(self.getAnnIds(imgIds=[i], catIds=class_ids, iscrowd=None))
-            )
+        for scene_id in scene_ids:
+            for image_id in range(self.image_len_info[scene_id]):
+                image_file = self.scene_instances_gt_info[scene_id]["images"][image_id]["file_name"].split("/")[-1]
+                self.add_image(
+                    source="tless",
+                    id=int(scene_id) * 1296 + image_id,
+                    path=os.path.join(self.dataset_dir, scene_id, "rgb", image_file),
+                    scene_id=scene_id,
+                    image_id=image_id,
+                    depth_path=os.path.join(self.dataset_dir, scene_id, "depth", image_file),
+                    width=self.scene_instances_gt_info[scene_id]["images"][image_id]["width"],
+                    height=self.scene_instances_gt_info[scene_id]["images"][image_id]["height"],
+                    annotations=self.scene_instances_gt_info[scene_id]["annotations"][image_id],
+                )
 
         self.num_classes = len(self.class_info)
         self.class_ids = np.arange(self.num_classes)
@@ -105,19 +115,13 @@ class PoseNetDataset(DatasetBase):
         logger.info(f"Number of images: {self.num_images}")
         logger.info(f"Number of classes: {self.num_classes}")
 
-    def load_pose_Rt(self, image_id, annotation_id):
-        image_id_str = str(image_id)
-        if image_id_str in self.scene_pose_gt_info:
-            for annotation in self.scene_pose_gt_info[image_id_str]:
-                if annotation['annotation_id'] == annotation_id:
-                    return annotation['cam_R_m2c'], annotation['cam_t_m2c']
-        return None, None
+    def load_pose_Rt(self, scene_id: str, image_id: int):
+        pose_dict = self.scene_pose_gt_info[scene_id][str(image_id)][0]
+        return pose_dict["cam_R_m2c"], pose_dict["cam_t_m2c"]
 
-    def load_camera_k(self, image_id):
-        image_id_str = str(image_id)
-        if image_id_str in self.scene_camera_info:
-            return self.scene_camera_info[image_id_str]['cam_K']
-        return None
+    def load_camera_k(self, scene_id: str, image_id: int):
+        cam_dict = self.scene_camera_info[scene_id][str(image_id)]
+        return cam_dict["cam_K"], cam_dict["depth_scale"]
 
     def get_all_templates(self, cls_name, device):
         n_template_view = self.n_template_view
@@ -167,39 +171,37 @@ class PoseNetDataset(DatasetBase):
         choose = choose[choose_idx]
 
         xyz = np.load(xyz_path).astype(np.float32)
-        xyz = convert_blender_to_pyrender(xyz)[y1:y2, x1:x2, :]
-        # xyz = xyz[y1:y2, x1:x2, :]
+        # xyz = convert_blender_to_pyrender(xyz)[y1:y2, x1:x2, :]
+        xyz = xyz[y1:y2, x1:x2, :]
         xyz = xyz.reshape((-1, 3))[choose, :]
         choose = get_resize_rgb_choose(choose, [y1, y2, x1, x2], self.img_size)
 
         return rgb, choose, xyz
 
     def get_models(self, file_base, cls_name):
-        mesh_path = os.path.join(file_base, cls_name + '.obj')
+        mesh_path = os.path.join(file_base, cls_name + '.ply')
         mesh = trimesh.load(mesh_path, force='mesh')
         model_pts, _ = trimesh.sample.sample_surface(mesh, self.n_sample_model_point)
-        return model_pts.astype(np.float32)
+        return model_pts.astype(np.float32) / 1000.0
 
     def get_train_data(self, index):
-        # 获取当前训练图片ID及其所有标注
-        image_id = self.image_ids[index]
-        annotations = self.load_image_annotations(image_id)
+        random_image_info = self.image_info[index]
+        scene_id = random_image_info["scene_id"]
+        annotations = random_image_info["annotations"]
+        image_id = random_image_info["image_id"]
         if len(annotations) == 0:
             return None
 
-        # 随机选择一个有效标注
-        valid_annotation = np.random.choice(annotations)
-        cls_id = valid_annotation['category_id']
+        cls_id = annotations['category_id']
         cls_name = self.class_names[cls_id]
-        annotation_id = valid_annotation['id']
 
         # 加载位姿信息（旋转矩阵R和平移向量t
-        target_R, target_t = self.load_pose_Rt(image_id, annotation_id)
+        target_R, target_t = self.load_pose_Rt(scene_id, image_id)
         target_R = np.array(target_R).reshape(3, 3).astype(np.float32)
-        target_t = np.array(target_t).reshape(3).astype(np.float32)
+        target_t = np.array(target_t).reshape(3).astype(np.float32) / 1000.0
 
         # 加载相机内参矩阵
-        camera_k = self.load_camera_k(image_id)
+        camera_k, depth_scale = self.load_camera_k(scene_id, image_id)
         if camera_k is None:
             return None
         camera_k = np.array(camera_k).reshape(3, 3).astype(np.float32)
@@ -211,7 +213,7 @@ class PoseNetDataset(DatasetBase):
             return None
 
         # 加载目标物体mask
-        mask = load_mask(valid_annotation, self.image_info[image_id]['height'], self.image_info[image_id]['width'])
+        mask = load_mask(annotations, annotations['height'], annotations['width'])
         if mask is None or np.sum(mask) == 0:
             return None
 
@@ -225,16 +227,16 @@ class PoseNetDataset(DatasetBase):
         choose = mask.astype(np.float32).flatten().nonzero()[0]
 
         # 加载深度图数据
-        depth_path = self.image_info[image_id]['depth_path']
+        depth_path = random_image_info["depth_path"]
         depth = load_depth_image(depth_path).astype(np.float32)
-        depth = depth * self.depth_scale / 1000.0 + 0.085
+        depth = depth * depth_scale / 1000.0
         pts = get_point_cloud_from_depth(depth, camera_k, [y1, y2, x1, x2])
         pts = pts.reshape(-1, 3)[choose, :]
 
         # 将点云转换到目标物体的坐标系
         target_pts = (pts - target_t[None, :]) @ target_R
         tem_pts = np.concatenate([tem1_pts, tem2_pts], axis=0)
-        # visualize_point_cloud(target_pts, tem_pts)
+        visualize_point_cloud(target_pts, tem_pts)
         radius = np.max(np.linalg.norm(tem_pts, axis=1))
         target_radius = np.linalg.norm(target_pts, axis=1)
         flag = target_radius < radius * 1.2
@@ -250,7 +252,7 @@ class PoseNetDataset(DatasetBase):
         pts = pts[choose_idx]
 
         # rgb
-        image_path = self.image_info[image_id]['path']
+        image_path = random_image_info['path']
         rgb = load_color_image(image_path)
         rgb = cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB)
         rgb = rgb[y1:y2, x1:x2, :]
@@ -291,25 +293,24 @@ class PoseNetDataset(DatasetBase):
         return input_dict
 
     def get_test_data(self, index):
-        # 获取当前训练图片ID及其所有标注
-        image_id = self.image_ids[index]
-        annotations = self.load_image_annotations(image_id)
+        # 同理
+        random_image_info = self.image_info[index]
+        scene_id = random_image_info["scene_id"]
+        annotations = random_image_info["annotations"]
+        image_id = random_image_info["image_id"]
         if len(annotations) == 0:
             return None
 
-        # 随机选择一个有效标注
-        valid_annotation = np.random.choice(annotations)
-        cls_id = valid_annotation['category_id']
+        cls_id = annotations['category_id']
         cls_name = self.class_names[cls_id]
-        annotation_id = valid_annotation['id']
 
-        # 加载位姿信息（旋转矩阵R和平移向量t)
-        target_R, target_t = self.load_pose_Rt(image_id, annotation_id)
+        # 加载位姿信息（旋转矩阵R和平移向量t
+        target_R, target_t = self.load_pose_Rt(scene_id, image_id)
         target_R = np.array(target_R).reshape(3, 3).astype(np.float32)
-        target_t = np.array(target_t).reshape(3).astype(np.float32)
+        target_t = np.array(target_t).reshape(3).astype(np.float32) / 1000.0
 
         # 加载相机内参矩阵
-        camera_k = self.load_camera_k(image_id)
+        camera_k, depth_scale = self.load_camera_k(scene_id, image_id)
         if camera_k is None:
             return None
         camera_k = np.array(camera_k).reshape(3, 3).astype(np.float32)
@@ -320,7 +321,7 @@ class PoseNetDataset(DatasetBase):
             return None
 
         # 加载目标物体mask
-        mask = load_mask(valid_annotation, self.image_info[image_id]['height'], self.image_info[image_id]['width'])
+        mask = load_mask(annotations, annotations['height'], annotations['width'])
         if mask is None or np.sum(mask) == 0:
             return None
         mask = (mask * 255).astype(np.uint8)
@@ -330,11 +331,14 @@ class PoseNetDataset(DatasetBase):
         choose = mask.astype(np.float32).flatten().nonzero()[0]
 
         # 加载深度图数据
-        depth_path = self.image_info[image_id]['depth_path']
+        depth_path = random_image_info["depth_path"]
         depth = load_depth_image(depth_path).astype(np.float32)
-        depth = depth * self.depth_scale / 1000.0 + 0.085
+        depth = depth * depth_scale / 1000.0
         pts = get_point_cloud_from_depth(depth, camera_k, [y1, y2, x1, x2])
         pts = pts.reshape(-1, 3)[choose, :]
+
+        target_pts = (pts - target_t[None, :]) @ target_R
+        visualize_point_cloud(target_pts, model_points)
 
         if len(choose) <= self.n_sample_observed_point:
             choose_idx = np.random.choice(np.arange(len(choose)), self.n_sample_observed_point)
@@ -344,10 +348,12 @@ class PoseNetDataset(DatasetBase):
         pts = pts[choose_idx]
 
         # rgb
-        image_path = self.image_info[image_id]['path']
+        image_path = random_image_info['path']
         rgb = load_color_image(image_path)
         rgb = cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB)
         rgb = rgb[y1:y2, x1:x2, :]
+        if np.random.rand() < 0.8 and self.color_augmentor is not None:
+            rgb = self.color_augmentor(image=rgb)["image"]
         if self.rgb_mask_flag:
             rgb = rgb * (mask[:, :, None] > 0).astype(np.uint8)
         rgb = cv2.resize(rgb, (self.img_size, self.img_size), interpolation=cv2.INTER_LINEAR)
@@ -359,7 +365,6 @@ class PoseNetDataset(DatasetBase):
             'rgb': torch.FloatTensor(rgb),
             'rgb_choose': torch.IntTensor(rgb_choose).long(),
             'model': torch.FloatTensor(model_points),
-            # 'obj': torch.IntTensor([cls_id]).long(),
             'obj': torch.tensor(cls_id, dtype=torch.long),
             'translation_label': torch.FloatTensor(target_t),
             'rotation_label': torch.FloatTensor(target_R),
@@ -367,111 +372,15 @@ class PoseNetDataset(DatasetBase):
         return ret_dict
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     import random
     from easydict import EasyDict as edict
     import yaml
     from data.dataloader.build import build_dataloader
 
-    with open('../../cfg/indus.yaml', 'r') as f:
+    with open('../../cfg/tless.yaml', 'r') as f:
         cfg_dict = yaml.safe_load(f)
     cfg = edict(cfg_dict)
+    dataset = TlessDataset(cfg.TEST_DATA, is_train=False)
 
-
-    # 测试代码
-    def test_posenet_dataset():
-        print("开始测试PoseNetDataset加载...")
-
-        train_dataset = PoseNetDataset(cfg.TRAIN_DATA, is_train=True)
-        print(f"数据集加载完成，共有 {len(train_dataset)} 张训练图片")
-
-        index = random.randint(0, len(train_dataset) - 1)
-        print(f"随机选取样本索引: {index}")
-
-        train_data = train_dataset.get_train_data(index)
-        if train_data is None:
-            print(f"样本 {index} 加载失败，可能数据不足或标注缺失")
-        else:
-            print(f"样本 {index} 加载成功，关键字段如下：")
-            print(f" - pts: {train_data['pts'].shape}")
-            print(f" - rgb: {train_data['rgb'].shape}")
-            print(f" - tem1_rgb: {train_data['tem1_rgb'].shape}")
-            print(f" - translation_label: {train_data['translation_label']}")
-            print(f" - rotation_label: {train_data['rotation_label'].shape}")
-
-        # 使用DataLoader测试批量加载
-        train_dataloader = build_dataloader(train_dataset, batch=cfg.TRAIN_DATA.BATCH_SIZE,
-                                            workers=cfg.TRAIN_DATA.WORKERS, shuffle=True)
-        # collate_fn=None
-        # {
-        #     'rgb': [Tensor1, Tensor2, Tensor3, ...],  # 每个样本的 'rgb'
-        #     'pts': [Tensor4, Tensor5, Tensor6, ...]  # 每个样本的 'pts'
-        # }
-
-        print("测试批量加载...")
-        for batch_index, batch_data in enumerate(train_dataloader):
-            print(f"Batch {batch_index + 1}: 数据类型: {type(batch_data)}")
-            print(f"Batch {batch_index + 1}: 数据内容: {batch_data.keys()}")
-            print(f"Batch {batch_index + 1}: 样本数量: {len(next(iter(batch_data.values())))}")
-            if len(batch_data) > 0:
-                # 遍历字典内容
-                for key, value in batch_data.items():
-                    print(
-                        f" - Key: {key}, 第一个样本 shape: {value[0].shape if hasattr(value[0], 'shape') else type(value[0])}")
-
-            break
-
-
-    def test_point_cloud(is_train: bool = True):
-        from utils.visualize import visualize_point_cloud
-        if is_train:
-            dataset = PoseNetDataset(cfg.TRAIN_DATA, is_train=True)
-
-            print(f"数据集加载完成，共有 {len(dataset)} 张训练图片")
-            index = random.randint(0, len(dataset) - 1)
-            print(f"随机选取样本索引: {index}")
-
-            data = dataset.get_train_data(index)
-
-            if data is None:
-                print(f"样本 {index} 加载失败，可能数据不足或标注缺失")
-
-            pts = data['pts'].cpu().numpy()
-            target_t = data['translation_label'].cpu().numpy().astype(np.float64)
-            target_R = data['rotation_label'].cpu().numpy().astype(np.float64)
-
-            tem1_pts = data['tem1_pts'].cpu().numpy().astype(np.float64)
-            tem2_pts = data['tem2_pts'].cpu().numpy().astype(np.float64)
-
-            # 使用给定的旋转和平移对 pts 进行变换
-            target_pts = (pts - target_t[None, :]) @ target_R
-
-            # 合并 tem1_pts 和 tem2_pts
-            tem_pts = np.concatenate([tem1_pts, tem2_pts], axis=0)
-            visualize_point_cloud(target_pts, tem_pts)
-
-        else:
-            dataset = PoseNetDataset(cfg.TEST_DATA, is_train=False)
-
-            print(f"数据集加载完成，共有 {len(dataset)} 张训练图片")
-            index = random.randint(0, len(dataset) - 1)
-            print(f"随机选取样本索引: {index}")
-
-            data = dataset.get_test_data(index)
-
-            if data is None:
-                print(f"样本 {index} 加载失败，可能数据不足或标注缺失")
-
-            pts = data['pts'].cpu().numpy()
-            target_t = data['translation_label'].cpu().numpy().astype(np.float64)
-            target_R = data['rotation_label'].cpu().numpy().astype(np.float64)
-            model_pts = data['model'].cpu().numpy().astype(np.float64)
-
-            # 使用给定的旋转和平移对 pts 进行变换
-            target_pts = (pts - target_t[None, :]) @ target_R
-
-            visualize_point_cloud(target_pts, model_pts)
-
-
-    test_point_cloud(is_train=False)
-    # test_posenet_dataset()
+    dataset.get_test_data(0)
