@@ -173,3 +173,4 @@ checkpoints/
 # calibration image
 calibration_*.npy
 *.png
+*.jpg
