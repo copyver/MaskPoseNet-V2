@@ -419,7 +419,7 @@ class BaseTrainer:
         self.train_dataset = self.get_dataset(rank=LOCAL_RANK, is_train=True)
         self.train_loader = self.get_dataloader(batch_size=batch_size, rank=LOCAL_RANK, is_train=True)
         if RANK in {-1, 0}:
-            self.test_dataset = self.get_dataset(self.cfg, is_train=False)
+            self.test_dataset = self.get_dataset(rank=RANK, is_train=False)
             self.test_loader = self.get_dataloader(batch_size=self.cfg.TEST_DATA.BATCH_SIZE, rank=-1, is_train=False)
             self.validator = self.get_validator()
             metric_keys = self.validator.metrics.keys + self.label_loss_items(prefix="val")

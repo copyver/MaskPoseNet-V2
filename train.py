@@ -3,7 +3,7 @@ from engine.model import Model
 
 def main():
     model = Model(
-        model='cfg/indus.yaml',
+        model='cfg/tless.yaml',
         task='pose',
         verbose=False,
         is_train=True

@@ -50,6 +50,12 @@ class DatasetBase(data.Dataset):
         pool = [i for i in range(self.__len__()) if i != idx]
         return np.random.choice(pool)
 
+    def load_data(self):
+        """
+        Loads the dataset.
+        """
+        raise NotImplementedError
+
     def get_train_data(self, index):
         """
         Should be overridden by subclasses to return training data for a given index.
@@ -61,6 +67,12 @@ class DatasetBase(data.Dataset):
         Should be overridden by subclasses to return test data for a given index.
         """
         raise NotImplementedError
+
+    def load_pose_Rt(self):
+        raise NotImplementedError("load_pose_Rt is not Implemented")
+
+    def load_camera_k(self):
+        raise NotImplementedError("load_camera_k is not Implemented")
 
     def add_class(self, source, class_id, class_name):
         self.class_info.append({
@@ -156,8 +168,3 @@ class DatasetBase(data.Dataset):
         if self.is_train:
             np.random.shuffle(self.image_ids)
 
-    def load_pose_Rt(self):
-        raise NotImplementedError("load_pose_Rt is not Implemented")
-
-    def load_camera_k(self):
-        raise NotImplementedError("load_camera_k is not Implemented")

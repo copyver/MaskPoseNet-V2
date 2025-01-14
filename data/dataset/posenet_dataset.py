@@ -31,9 +31,6 @@ class PoseNetDataset(DatasetBase):
     def __init__(self, cfg, is_train=True):
         super().__init__(cfg, is_train)
         self.data_dir = cfg.DATA_DIR
-        # self.num_img_per_epoch = cfg.NUM_IMG_PER_EPOCH
-        # self.min_visib_px = cfg.MIN_PX_COUNT_VISIB
-        # self.min_visib_frac = cfg.MIN_VISIB_FRACT
         self.depth_scale = cfg.DEPTH_SCALE
         self.rgb_mask_flag = cfg.RGB_MASK_FLAG
         self.img_size = cfg.IMG_SIZE
@@ -50,16 +47,15 @@ class PoseNetDataset(DatasetBase):
             self.shift_range = cfg.SHIFT_RANGE
             self.color_augmentor = A.Compose([
                 A.OneOf([
-                    A.CoarseDropout(max_holes=5, max_height=20, max_width=20, p=0.5),  # 替代 CoarseDropout
-                    A.GaussianBlur(blur_limit=(3, 7), p=0.4),  # 替代 GaussianBlur
+                    A.CoarseDropout(max_holes=5, max_height=20, max_width=20, p=0.5),
+                    A.GaussianBlur(blur_limit=(3, 7), p=0.4),
                 ], p=0.5),
                 A.OneOf([
-                    A.Sharpen(alpha=(0.0, 1.0), lightness=(0.5, 2.0), p=0.3),  # 替代 EnhanceSharpness
+                    A.Sharpen(alpha=(0.0, 1.0), lightness=(0.5, 2.0), p=0.3),
                     A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.5, p=0.5),
-                    # 替代 Brightness/Contrast
-                    A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.3),  # 替代 EnhanceColor
+                    A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.3),
                 ], p=0.8),
-                A.InvertImg(p=0.3),  # 替代 Invert
+                A.InvertImg(p=0.3),
             ], p=1.0)
             self.load_data("train")
 
@@ -377,7 +373,6 @@ if __name__ == "__main__":
         cfg_dict = yaml.safe_load(f)
     cfg = edict(cfg_dict)
 
-
     # 测试代码
     def test_posenet_dataset():
         print("开始测试PoseNetDataset加载...")
@@ -473,5 +468,5 @@ if __name__ == "__main__":
             visualize_point_cloud(target_pts, model_pts)
 
 
-    test_point_cloud(is_train=False)
+    test_point_cloud(is_train=True)
     # test_posenet_dataset()

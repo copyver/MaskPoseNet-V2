@@ -4,6 +4,7 @@ import torch
 
 from data.dataloader.build import build_dataloader
 from data.dataset.posenet_dataset import PoseNetDataset
+from data.dataset.tless_dataset import TlessDataset
 from engine import BaseTrainer
 from models.pose.loss_utils import Loss
 from utils.torch_utils import torch_distributed_zero_first
@@ -14,7 +15,7 @@ class PoseTrainer(BaseTrainer):
         super(PoseTrainer, self).__init__(cfg, model, callbacks=callbacks)
 
     def build_dataset(self, cfg, is_train=True):
-        return PoseNetDataset(cfg, is_train)
+        return eval(cfg.DATASET)(cfg, is_train)
 
     def _set_up_loss(self):
         return Loss()

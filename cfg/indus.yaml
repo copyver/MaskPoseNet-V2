@@ -80,6 +80,7 @@ POSE_MODEL:
 
 
 TRAIN_DATA:
+  DATASET: PosenetDataset
   DATA_DIR: "/home/yhlever/DeepLearning/6D_object_pose_estimation/datasets/indus"
   DATASET_DIR: "indus-12000t-1200v"
   TEMPLATE_DIR: "templates"
@@ -101,6 +102,7 @@ TRAIN_DATA:
 
 
 TEST_DATA:
+  DATASET: PosenetDataset
   DATA_DIR: "/home/yhlever/DeepLearning/6D_object_pose_estimation/datasets/indus"
   DATASET_DIR: "indus-12000t-1200v"
   TEMPLATE_DIR: "templates"

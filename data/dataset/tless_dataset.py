@@ -25,8 +25,6 @@ class TlessDataset(DatasetBase):
     def __init__(self, cfg, is_train=True):
         super().__init__(cfg, is_train)
         self.data_dir = cfg.DATA_DIR
-        # self.min_visib_px = cfg.MIN_PX_COUNT_VISIB
-        # self.min_visib_frac = cfg.MIN_VISIB_FRACT
         self.depth_scale = cfg.DEPTH_SCALE
         self.rgb_mask_flag = cfg.RGB_MASK_FLAG
         self.img_size = cfg.IMG_SIZE
@@ -39,35 +37,35 @@ class TlessDataset(DatasetBase):
                                                                   std=[0.229, 0.224, 0.225])])
         self.image_len_info = {}
         if is_train:
+            self.train_image_info = None
             self.dilate_mask = cfg.DILATE_MASK
             self.shift_range = cfg.SHIFT_RANGE
             self.color_augmentor = A.Compose([
                 A.OneOf([
-                    A.CoarseDropout(max_holes=5, max_height=20, max_width=20, p=0.5),  # 替代 CoarseDropout
-                    A.GaussianBlur(blur_limit=(3, 7), p=0.4),  # 替代 GaussianBlur
+                    A.CoarseDropout(max_holes=5, max_height=20, max_width=20, p=0.5),
+                    A.GaussianBlur(blur_limit=(3, 7), p=0.4),
                 ], p=0.5),
                 A.OneOf([
-                    A.Sharpen(alpha=(0.0, 1.0), lightness=(0.5, 2.0), p=0.3),  # 替代 EnhanceSharpness
+                    A.Sharpen(alpha=(0.0, 1.0), lightness=(0.5, 2.0), p=0.3),
                     A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.5, p=0.5),
                     # 替代 Brightness/Contrast
-                    A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.3),  # 替代 EnhanceColor
+                    A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.3),
                 ], p=0.8),
-                A.InvertImg(p=0.3),  # 替代 Invert
+                A.InvertImg(p=0.3),
             ], p=1.0)
-            self.load_data("train")
+            self.load_data(is_train)
 
         else:
+            self.test_image_info = None
             self.n_sample_model_point = cfg.N_SAMPLE_MODEL_POINT
             self.model_dir = os.path.join(self.data_dir, cfg.MODEL_DIR)
             self.n_template_view = cfg.N_TEMPLATE_VIEW
             self.color_augmentor = None
-            self.load_data("val")
+            self.load_data(is_train)
 
-    def load_data(self, subset: str = "train"):
+    def load_data(self, is_train=True):
         """
         遍历新数据集目录结构:
-        dataset_dir / subset / SCENE_ID / {scene_gt_coco.json, scene_camera.json, etc.}
-        depth / mask / mask_visib / rgb / ...
         """
         # 列出所有场景ID文件夹
         scene_ids = [
@@ -92,9 +90,17 @@ class TlessDataset(DatasetBase):
         for i in class_ids:
             self.add_class(source="tless", class_id=i, class_name=f"obj_{i:06d}")
 
+        # 添加图像信息
         for scene_id in scene_ids:
-            for image_id in range(self.image_len_info[scene_id]):
-                image_file = self.scene_instances_gt_info[scene_id]["images"][image_id]["file_name"].split("/")[-1]
+            image_count = self.image_len_info[scene_id]
+            start_idx = 0 if is_train else max(0, image_count - 100)
+            end_idx = image_count - 100 if is_train else image_count
+
+            for image_id in range(start_idx, end_idx):
+                image_info = self.scene_instances_gt_info[scene_id]["images"][image_id]
+                annotations = self.scene_instances_gt_info[scene_id]["annotations"][image_id]
+                image_file = image_info["file_name"].split("/")[-1]
+
                 self.add_image(
                     source="tless",
                     id=int(scene_id) * 1296 + image_id,
@@ -102,9 +108,9 @@ class TlessDataset(DatasetBase):
                     scene_id=scene_id,
                     image_id=image_id,
                     depth_path=os.path.join(self.dataset_dir, scene_id, "depth", image_file),
-                    width=self.scene_instances_gt_info[scene_id]["images"][image_id]["width"],
-                    height=self.scene_instances_gt_info[scene_id]["images"][image_id]["height"],
-                    annotations=self.scene_instances_gt_info[scene_id]["annotations"][image_id],
+                    width=image_info["width"],
+                    height=image_info["height"],
+                    annotations=annotations,
                 )
 
         self.num_classes = len(self.class_info)
@@ -114,6 +120,24 @@ class TlessDataset(DatasetBase):
         self.image_ids = np.arange(self.num_images)
         logger.info(f"Number of images: {self.num_images}")
         logger.info(f"Number of classes: {self.num_classes}")
+
+    def add_train_image_info(self, source: str, path: str, **kwargs):
+        image_info = {
+            "id": id,
+            "source": source,
+            "path": path,
+        }
+        image_info.update(kwargs)
+        self.train_image_info.append(image_info)
+
+    def add_val_image_info(self, source: str, path: str, **kwargs):
+        image_info = {
+            "id": id,
+            "source": source,
+            "path": path,
+        }
+        image_info.update(kwargs)
+        self.test_image_info.append(image_info)
 
     def load_pose_Rt(self, scene_id: str, image_id: int):
         pose_dict = self.scene_pose_gt_info[scene_id][str(image_id)][0]
@@ -173,7 +197,7 @@ class TlessDataset(DatasetBase):
         xyz = np.load(xyz_path).astype(np.float32)
         # xyz = convert_blender_to_pyrender(xyz)[y1:y2, x1:x2, :]
         xyz = xyz[y1:y2, x1:x2, :]
-        xyz = xyz.reshape((-1, 3))[choose, :]
+        xyz = xyz.reshape((-1, 3))[choose, :] * 0.001
         choose = get_resize_rgb_choose(choose, [y1, y2, x1, x2], self.img_size)
 
         return rgb, choose, xyz
@@ -229,19 +253,20 @@ class TlessDataset(DatasetBase):
         # 加载深度图数据
         depth_path = random_image_info["depth_path"]
         depth = load_depth_image(depth_path).astype(np.float32)
-        depth = depth * depth_scale / 1000.0
+        depth = depth / 50.0 + 0.15
         pts = get_point_cloud_from_depth(depth, camera_k, [y1, y2, x1, x2])
         pts = pts.reshape(-1, 3)[choose, :]
 
         # 将点云转换到目标物体的坐标系
         target_pts = (pts - target_t[None, :]) @ target_R
         tem_pts = np.concatenate([tem1_pts, tem2_pts], axis=0)
-        visualize_point_cloud(target_pts, tem_pts)
+        # visualize_point_cloud(target_pts, tem_pts)
         radius = np.max(np.linalg.norm(tem_pts, axis=1))
         target_radius = np.linalg.norm(target_pts, axis=1)
         flag = target_radius < radius * 1.2
         pts = pts[flag]
         choose = choose[flag]
+
         if len(choose) < 500:
             return None
         if len(choose) <= self.n_sample_observed_point:
@@ -333,12 +358,12 @@ class TlessDataset(DatasetBase):
         # 加载深度图数据
         depth_path = random_image_info["depth_path"]
         depth = load_depth_image(depth_path).astype(np.float32)
-        depth = depth * depth_scale / 1000.0
+        depth = depth / 50.0 + 0.15
         pts = get_point_cloud_from_depth(depth, camera_k, [y1, y2, x1, x2])
         pts = pts.reshape(-1, 3)[choose, :]
 
-        target_pts = (pts - target_t[None, :]) @ target_R
-        visualize_point_cloud(target_pts, model_points)
+        # target_pts = (pts - target_t[None, :]) @ target_R
+        # visualize_point_cloud(target_pts, model_points)
 
         if len(choose) <= self.n_sample_observed_point:
             choose_idx = np.random.choice(np.arange(len(choose)), self.n_sample_observed_point)
@@ -376,11 +401,60 @@ if __name__ == '__main__':
     import random
     from easydict import EasyDict as edict
     import yaml
-    from data.dataloader.build import build_dataloader
 
     with open('../../cfg/tless.yaml', 'r') as f:
         cfg_dict = yaml.safe_load(f)
     cfg = edict(cfg_dict)
-    dataset = TlessDataset(cfg.TEST_DATA, is_train=False)
 
-    dataset.get_test_data(0)
+    def test_point_cloud(is_train: bool = True):
+        from utils.visualize import visualize_point_cloud
+        if is_train:
+            dataset = TlessDataset(cfg.TRAIN_DATA, is_train=True)
+
+            print(f"数据集加载完成，共有 {len(dataset)} 张训练图片")
+            index = random.randint(0, len(dataset) - 1)
+            print(f"随机选取样本索引: {index}")
+
+            data = dataset.get_train_data(index)
+
+            if data is None:
+                print(f"样本 {index} 加载失败，可能数据不足或标注缺失")
+
+            pts = data['pts'].cpu().numpy()
+            target_t = data['translation_label'].cpu().numpy().astype(np.float64)
+            target_R = data['rotation_label'].cpu().numpy().astype(np.float64)
+
+            tem1_pts = data['tem1_pts'].cpu().numpy().astype(np.float64)
+            tem2_pts = data['tem2_pts'].cpu().numpy().astype(np.float64)
+
+            # 使用给定的旋转和平移对 pts 进行变换
+            target_pts = (pts - target_t[None, :]) @ target_R
+
+            # 合并 tem1_pts 和 tem2_pts
+            tem_pts = np.concatenate([tem1_pts, tem2_pts], axis=0)
+            visualize_point_cloud(target_pts, tem_pts)
+
+        else:
+            dataset = TlessDataset(cfg.TEST_DATA, is_train=False)
+
+            print(f"数据集加载完成，共有 {len(dataset)} 张训练图片")
+            index = random.randint(0, len(dataset) - 1)
+            print(f"随机选取样本索引: {index}")
+
+            data = dataset.get_test_data(index)
+
+            if data is None:
+                print(f"样本 {index} 加载失败，可能数据不足或标注缺失")
+
+            pts = data['pts'].cpu().numpy()
+            target_t = data['translation_label'].cpu().numpy().astype(np.float64)
+            target_R = data['rotation_label'].cpu().numpy().astype(np.float64)
+            model_pts = data['model'].cpu().numpy().astype(np.float64)
+
+            # 使用给定的旋转和平移对 pts 进行变换
+            target_pts = (pts - target_t[None, :]) @ target_R
+
+            visualize_point_cloud(target_pts, model_pts)
+
+
+    test_point_cloud(is_train=False,)
