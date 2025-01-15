@@ -36,6 +36,7 @@ class TlessDataset(DatasetBase):
                                              transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                                                   std=[0.229, 0.224, 0.225])])
         self.image_len_info = {}
+        self.test_indices = {}  # 每个场景对应的测试索引
         if is_train:
             self.train_image_info = None
             self.dilate_mask = cfg.DILATE_MASK
@@ -53,7 +54,6 @@ class TlessDataset(DatasetBase):
                 ], p=0.8),
                 A.InvertImg(p=0.3),
             ], p=1.0)
-            self.load_data(is_train)
 
         else:
             self.test_image_info = None
@@ -61,7 +61,8 @@ class TlessDataset(DatasetBase):
             self.model_dir = os.path.join(self.data_dir, cfg.MODEL_DIR)
             self.n_template_view = cfg.N_TEMPLATE_VIEW
             self.color_augmentor = None
-            self.load_data(is_train)
+
+        self.load_data(is_train)
 
     def load_data(self, is_train=True):
         """
@@ -93,10 +94,21 @@ class TlessDataset(DatasetBase):
         # 添加图像信息
         for scene_id in scene_ids:
             image_count = self.image_len_info[scene_id]
-            start_idx = 0 if is_train else max(0, image_count - 100)
-            end_idx = image_count - 100 if is_train else image_count
+            if scene_id not in self.test_indices:
+                test_num = min(20, image_count)
+                self.test_indices[scene_id] = random.sample(range(image_count), test_num)
 
-            for image_id in range(start_idx, end_idx):
+            test_idx_set = set(self.test_indices[scene_id])
+            all_idx_set = set(range(image_count))
+
+            if is_train:
+                selected_indices = all_idx_set - test_idx_set
+            else:
+                selected_indices = test_idx_set
+
+            selected_indices = sorted(list(selected_indices))
+
+            for image_id in selected_indices:
                 image_info = self.scene_instances_gt_info[scene_id]["images"][image_id]
                 annotations = self.scene_instances_gt_info[scene_id]["annotations"][image_id]
                 image_file = image_info["file_name"].split("/")[-1]

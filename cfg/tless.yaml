@@ -6,7 +6,7 @@ SOLVERS:
   SEED: 42
   HALF: False
   OUTPUT_DIR: 'middle_log'
-  LOGS_NAME: '0114-2-tless-train-b'
+  LOGS_NAME: '0115-tless-train-b'
   TENSORBOARD_LOGS_DIR: 'logs'
   CHECKPOINTS_DIR: 'checkpoints'
   METRIC_DIR: 'metrics'
