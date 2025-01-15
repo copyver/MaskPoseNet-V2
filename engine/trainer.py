@@ -283,7 +283,7 @@ class BaseTrainer:
         self.last.write_bytes(serialized_ckpt)  # save last.pt
         if self.best_fitness == self.fitness:
             self.best.write_bytes(serialized_ckpt)  # save best.pt
-        if (self.save_epoch_freq > 0) and (self.epoch % self.save_epoch_freq == 0):
+        if (self.save_epoch_freq > 0) and ((self.epoch + 1) % self.save_epoch_freq == 0):
             (self.checkpoint_dir / f"epoch{self.epoch + 1}.pt").write_bytes(serialized_ckpt)
 
     def read_results_csv(self):

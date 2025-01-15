@@ -11,7 +11,7 @@ SOLVERS:
   CHECKPOINTS_DIR: 'checkpoints'
   METRIC_DIR: 'metrics'
   RESULTS_DIR: 'results'
-  EPOCHS: 10
+  EPOCHS: 50
   SAVE_EPOCH_FREQ: 1
   PRINT_FREQ: 1
   START_EPOCH: 0
