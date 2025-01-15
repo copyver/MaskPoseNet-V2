@@ -17,7 +17,7 @@ import torch
 import cv2
 import numpy as np
 import trimesh
-from random import random
+import random
 
 
 
