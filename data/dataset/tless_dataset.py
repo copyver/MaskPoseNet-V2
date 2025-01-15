@@ -4,7 +4,6 @@ import os
 import torchvision.transforms as transforms
 from loguru import logger
 from data.dataset.data_utils import (
-    convert_blender_to_pyrender,
     load_color_image,
     load_depth_image,
     load_mask,
@@ -18,7 +17,8 @@ import torch
 import cv2
 import numpy as np
 import trimesh
-from utils.visualize import visualize_point_cloud
+from random import random
+
 
 
 class TlessDataset(DatasetBase):
