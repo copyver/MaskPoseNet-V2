@@ -1,4 +1,5 @@
 import os
+import random
 import re
 from pathlib import Path
 from typing import Dict
@@ -25,8 +26,17 @@ DefaultArgs = {
     "RGB_MASK_FLAG": True,
     "SEG_FILTER_SCORE": 0.25,
     "N_TEMPLATE_VIEW": 42,
-    "DEPTH_SCALE": 5.0,
+    "DEPTH_SCALE": 1.0,
 }
+
+
+def init_seeds(seed=0):
+    """Initialize random number generator (RNG) seeds https://pytorch.org/docs/stable/notes/randomness.html."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)  # for Multi-GPU, exception safe
 
 
 class Colors:
@@ -204,7 +214,7 @@ class ModelSeg:
 
         # Load COCO class names
         self.classes = \
-            yaml_load("/home/yhlever/DeepLearning/ultralytics/ultralytics/cfg/datasets/indus-seg.yaml")["names"]
+            yaml_load("/home/yhlever/DeepLearning/ultralytics/ultralytics/cfg/datasets/indus-seg-real.yaml")["names"]
 
         # Create color palette
         self.color_palette = Colors()
@@ -532,6 +542,7 @@ class ModelPose:
                 mask=source["seg_mask"],
                 obj=source["cls_ids"],
                 camera_k=source["camera_k"],
+                seg_scores=source["seg_scores"],
             )
 
             batch = self.preprocess(batch)
@@ -719,7 +730,7 @@ class ModelPose:
         choose = (np.floor(row_idx * ratio_h) * img_size + np.floor(col_idx * ratio_w)).astype(np.int64)
         return choose
 
-    def load_pose_inference_source(self, image, depth_image, mask, obj, camera_k):
+    def load_pose_inference_source(self, image, depth_image, mask, obj, camera_k, seg_scores):
         """
         Loads data sources for pose estimation, normalizes the input image, depth map, and mask,
         and generates a dictionary containing point clouds, RGB data, model points, and other relevant information.
@@ -766,7 +777,9 @@ class ModelPose:
         all_obj = []
         whole_model_points = []
 
-        for m, o in zip(mask, obj):
+        for m, o, s in zip(mask, obj, seg_scores):
+            if s < 0.7:
+                continue
             # 加载/检查mask
             if m is None or not isinstance(m, np.ndarray):
                 raise ValueError("Mask is not a valid numpy array")
@@ -1004,7 +1017,7 @@ def draw_detections(image, pred_rots, pred_trans, model_points, intrinsics, colo
         # draw 3d bounding box
         transformed_bbox_3d = pred_rots[ind] @ bbox_3d + pred_trans[ind][:, np.newaxis]
         projected_bbox = calculate_2d_projections(transformed_bbox_3d, intrinsics)
-        draw_image_bbox = draw_3d_bbox(draw_image_bbox, projected_bbox, color)
+        draw_image_bbox = draw_3d_bbox(draw_image_bbox, projected_bbox, color, size=2)
         # draw point cloud
         transformed_pts_3d = pred_rots[ind] @ pts_3d + pred_trans[ind][:, np.newaxis]
         projected_pts = calculate_2d_projections(transformed_pts_3d, intrinsics)
@@ -1030,7 +1043,7 @@ def visualize_pose_bbox(results):
 
 class Model:
     def __init__(self, pose_model_path, seg_model_path, device):
-        # Build model
+        init_seeds(1988)
         onnxsession = ort.InferenceSession(
             seg_model_path,
             providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
@@ -1052,8 +1065,8 @@ class Model:
         seg_scores = [box[4] for box in boxes]
         cls_ids = [int(box[5]) + 1 for box in boxes]  # add background class
         mask_list = [masks[i] for i in range(masks.shape[0])]
-        if len(boxes) > 0 and save:
-            self.seg_model.draw_and_visualize(image, boxes, segments, vis=False, save=True)
+        # if len(boxes) > 0 and save:
+        #     self.seg_model.draw_and_visualize(image, boxes, segments, vis=False, save=True)
 
         source.update({
             "seg_scores": seg_scores,
@@ -1077,18 +1090,16 @@ class Model:
 
 if __name__ == "__main__":
     pose_model_pt_path = \
-        "/home/yhlever/DeepLearning/MaskPoseNet-V2/middle_log/0109-indus12000-train-l/checkpoints/best.pt"
-    seg_model_onnx_path = '/home/yhlever/DeepLearning/ultralytics/runs/segment/train5/weights/best.onnx'
-    image = cv2.imread("/home/yhlever/DeepLearning/6D_object_pose_estimation/datasets/indus/indus-12000t-1200v"
-                       "/val/images/color_ims/image_000512.png",
+        "/home/yhlever/DeepLearning/MaskPoseNet-V2/middle_log/0112-indus12000-train-b/checkpoints/best.pt"
+    seg_model_onnx_path = '/home/yhlever/DeepLearning/ultralytics/runs/segment/train6/weights/best.onnx'
+    image = cv2.imread("/home/yhlever/CLionProjects/ROBOT_GRASP_TORCH/results/image_000006.png",
                        flags=cv2.IMREAD_COLOR)
-    depth_image = cv2.imread("/home/yhlever/DeepLearning/6D_object_pose_estimation/datasets/indus/indus-12000t-1200v"
-                             "/val/images/depth_ims/image_000512.png",
+    depth_image = cv2.imread("/home/yhlever/CLionProjects/ROBOT_GRASP_TORCH/results/image_000007.png",
                              flags=cv2.IMREAD_UNCHANGED)
     camera_k = np.array([
-        [1039.5527733689619, 0.0, 639.3049718803047, ],
-        [0.0, 1039.5527733689619, 479.5612565995002, ],
-        [0.0, 0.0, 1.0, ],
+        [1062.67, 0, 646.17,],
+        [0, 1062.67, 474.24,],
+        [0, 0, 1.00],
     ], dtype=np.float64)
     my_model = Model(pose_model_pt_path, seg_model_onnx_path, device="cuda")
-    preds = my_model(image, depth_image, camera_k, save=True)
+    preds = my_model(image, depth_image, camera_k, save=True, vis=False)

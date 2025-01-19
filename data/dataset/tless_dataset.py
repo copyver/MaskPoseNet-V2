@@ -469,4 +469,4 @@ if __name__ == '__main__':
             visualize_point_cloud(target_pts, model_pts)
 
 
-    test_point_cloud(is_train=False,)
+    test_point_cloud(is_train=True,)
