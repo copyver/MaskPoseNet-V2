@@ -265,10 +265,10 @@ class PoseMetric(SimpleClass):
                 - add (np.ndarray): ADD errors
                 - ps (np.ndarray): predicted pose scores
         """
-        self.re.append(results[0])
-        self.te.append(results[1])
-        self.add.append(results[2])
-        self.ps.append(results[3])
+        self.re.extend(results[0].tolist())
+        self.te.extend(results[1].tolist())
+        self.add.extend(results[2].tolist())
+        self.ps.extend(results[3].tolist())
 
     def fitness(self):
         """

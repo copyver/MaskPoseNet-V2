@@ -6,13 +6,13 @@ SOLVERS:
   SEED: 42
   HALF: False
   OUTPUT_DIR: 'middle_log'
-  LOGS_NAME: '0112-indus12000-train-b'
+  LOGS_NAME: '0302-indus-train-b'
   TENSORBOARD_LOGS_DIR: 'logs'
   CHECKPOINTS_DIR: 'checkpoints'
   METRIC_DIR: 'metrics'
   RESULTS_DIR: 'results'
   EPOCHS: 10
-  SAVE_EPOCH_FREQ: 1
+  SAVE_EPOCH_FREQ: 2
   PRINT_FREQ: 1
   START_EPOCH: 0
   WARMUP_EPOCHS: 0
@@ -80,9 +80,9 @@ POSE_MODEL:
 
 
 TRAIN_DATA:
-  DATASET: PosenetDataset
+  DATASET: PoseNetDataset
   DATA_DIR: "/home/yhlever/DeepLearning/6D_object_pose_estimation/datasets/indus"
-  DATASET_DIR: "indus-12000t-1200v"
+  DATASET_DIR: "indus-16000t-2000v-2000e"
   TEMPLATE_DIR: "templates"
   DEPTH_SCALE: 5.0   # real 1.0 sim 5.0
   IMG_SIZE: 224
@@ -102,9 +102,9 @@ TRAIN_DATA:
 
 
 TEST_DATA:
-  DATASET: PosenetDataset
+  DATASET: PoseNetDataset
   DATA_DIR: "/home/yhlever/DeepLearning/6D_object_pose_estimation/datasets/indus"
-  DATASET_DIR: "indus-12000t-1200v"
+  DATASET_DIR: "indus-16000t-2000v-2000e"
   TEMPLATE_DIR: "templates"
   MODEL_DIR: "models"
   DEPTH_SCALE: 5.0
@@ -116,7 +116,7 @@ TEST_DATA:
   RGB_MASK_FLAG: True
   SEG_FILTER_SCORE: 0.25
   N_TEMPLATE_VIEW: 42
-  BATCH_SIZE: 1
+  BATCH_SIZE: 8
   NUM_WORKERS: 1
   SHUFFLE: False
   DROP_LAST: False

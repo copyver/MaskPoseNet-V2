@@ -125,14 +125,6 @@ def draw_3d_pts(img, imgpts, color, size=1):
 def draw_detections(image, pred_rots, pred_trans, model_points, intrinsics, color=(255, 0, 0)):
     num_pred_instances = len(pred_rots)
     draw_image_bbox = image.copy()
-    # # 3d bbox
-    # scale = (np.max(model_points, axis=0) - np.min(model_points, axis=0))
-    # shift = np.mean(model_points, axis=0)
-    # bbox_3d = get_3d_bbox(scale, shift)
-    #
-    # # 3d point
-    # choose = np.random.choice(np.arange(len(model_points)), 512)
-    # pts_3d = model_points[choose].T
 
     for ind in range(num_pred_instances):
         # 3d bbox

@@ -58,6 +58,7 @@ def sample_pts_feats(pts, feats, npoint=2048, return_index=False):
     pts = gather_operation(pts.transpose(1, 2).contiguous(), sample_idx)
     pts = pts.transpose(1, 2).contiguous()
     feats = gather_operation(feats.transpose(1, 2).contiguous(), sample_idx)
+
     feats = feats.transpose(1, 2).contiguous()
     if return_index:
         return pts, feats, sample_idx

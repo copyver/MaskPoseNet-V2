@@ -3,12 +3,11 @@ from engine.model import Model
 
 def main():
     model = Model(
-        model='cfg/tless.yaml',
+        model='cfg/indus.yaml',
         task='pose',
         verbose=False,
         is_train=True
     )
-
     model.train()
 
 

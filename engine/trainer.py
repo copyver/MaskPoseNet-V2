@@ -209,12 +209,14 @@ class BaseTrainer:
             self.run_callbacks("on_train_epoch_end")
             if RANK in {-1, 0}:
                 final_epoch = epoch + 1 >= self.epochs
-                # self.ema.update_attr(self.model, include=["yaml", "nc", "cfg", "names", "stride", "class_weights"])
 
                 # Validation
                 if self.cfg.SOLVERS.VAL or final_epoch or self.stopper.possible_stop or self.stop:
                     self.metrics, self.fitness = self.validate()
                 self.save_metrics(metrics={**self.label_loss_items(self.tloss), **self.metrics, **self.lr})
+
+                self.log_tensorboard(epoch)
+                # stop?
                 self.stop |= self.stopper(epoch + 1, self.fitness) or final_epoch
                 if self.cfg.SOLVERS.TIME:
                     self.stop |= (time.time() - self.train_time_start) > (self.cfg.SOLVERS.TIME * 3600)
@@ -256,6 +258,19 @@ class BaseTrainer:
             self.run_callbacks("on_train_end")
         self._clear_memory()
         self.run_callbacks("teardown")
+
+    def log_tensorboard(self, epoch):
+        log_data = {
+            "train/coarse_loss_0": self.tloss[0].item(),
+            "train/coarse_loss_1": self.tloss[1].item(),
+            "train/coarse_loss_2": self.tloss[2].item(),
+            "train/fine_loss_0": self.tloss[3].item(),
+            "train/fine_loss_1": self.tloss[4].item(),
+            "train/fine_loss_2": self.tloss[5].item(),
+            **{f"train/lr_pg{ir}": lr_value for ir, lr_value in self.lr.items()},
+            **{f"val/{key}": value for key, value in self.metrics.items()},
+        }
+        self.tensorboard_writer.write(log_data, epoch)
 
     def save_model(self):
         """Save model training checkpoints with additional metadata."""

@@ -20,6 +20,20 @@ from data.dataset.data_utils import (
     get_random_rotation,
     get_bbox,
 )
+from scipy.spatial import cKDTree
+
+
+def compute_add_error(pc1, pc2):
+    """
+    计算两个点云的ADD误差（平均最近邻距离）。
+    """
+    tree1 = cKDTree(pc1)
+    tree2 = cKDTree(pc2)
+    # 计算pc1中每个点到pc2的最近距离
+    dist1, _ = tree2.query(pc1)
+    # 计算pc2中每个点到pc1的最近距离
+    dist2, _ = tree1.query(pc2)
+    return (np.mean(dist1) + np.mean(dist2)) / 2
 
 
 class PoseNetDataset(DatasetBase):
@@ -81,6 +95,9 @@ class PoseNetDataset(DatasetBase):
             self.add_class("", i, self.loadCats(i)[0]["name"])
 
         # Add images
+        if subset == "val" and len(image_ids) > 100:
+            image_ids = image_ids[:100]
+
         for i in image_ids:
             image_file = self.imgs[i]['file_name']
             self.add_image(
@@ -164,7 +181,6 @@ class PoseNetDataset(DatasetBase):
 
         xyz = np.load(xyz_path).astype(np.float32)
         xyz = convert_blender_to_pyrender(xyz)[y1:y2, x1:x2, :]
-        # xyz = xyz[y1:y2, x1:x2, :]
         xyz = xyz.reshape((-1, 3))[choose, :]
         choose = get_resize_rgb_choose(choose, [y1, y2, x1, x2], self.img_size)
 
@@ -245,6 +261,10 @@ class PoseNetDataset(DatasetBase):
         choose = choose[choose_idx]
         pts = pts[choose_idx]
 
+        add_error = compute_add_error(pts, tem_pts)
+        if add_error > 1.0:
+            return None
+
         # rgb
         image_path = self.image_info[image_id]['path']
         rgb = load_color_image(image_path)
@@ -258,17 +278,17 @@ class PoseNetDataset(DatasetBase):
         rgb = self.transform(rgb)
         rgb_choose = get_resize_rgb_choose(choose, [y1, y2, x1, x2], self.img_size)
 
-        # 随机旋转增强
-        rand_R = get_random_rotation()
-        tem1_pts = tem1_pts @ rand_R
-        tem2_pts = tem2_pts @ rand_R
-        target_R = target_R @ rand_R
-
-        # 随机平移增强
-        add_t = np.random.uniform(-self.shift_range, self.shift_range, (1, 3))
-        target_t += add_t[0]
-        add_t += 0.001 * np.random.randn(1, 3)
-        pts += add_t
+        # # 随机旋转增强
+        # rand_R = get_random_rotation()
+        # tem1_pts = tem1_pts @ rand_R
+        # tem2_pts = tem2_pts @ rand_R
+        # target_R = target_R @ rand_R
+        #
+        # # 随机平移增强
+        # add_t = np.random.uniform(-self.shift_range, self.shift_range, (1, 3))
+        # target_t += add_t[0]
+        # add_t += 0.001 * np.random.randn(1, 3)
+        # pts += add_t
 
         input_dict = {
             'pts': torch.FloatTensor(pts),
@@ -311,8 +331,8 @@ class PoseNetDataset(DatasetBase):
         camera_k = np.array(camera_k).reshape(3, 3).astype(np.float32)
 
         # 加载模型点云数据
-        model_points = self.get_models(self.model_dir, cls_name)
-        if model_points is None:
+        model_pts = self.get_models(self.model_dir, cls_name)
+        if model_pts is None:
             return None
 
         # 加载目标物体mask
@@ -331,6 +351,10 @@ class PoseNetDataset(DatasetBase):
         depth = depth * self.depth_scale / 1000.0 + 0.085
         pts = get_point_cloud_from_depth(depth, camera_k, [y1, y2, x1, x2])
         pts = pts.reshape(-1, 3)[choose, :]
+
+        add_error = compute_add_error(pts, model_pts)
+        if add_error > 1.0:
+            return None
 
         if len(choose) <= self.n_sample_observed_point:
             choose_idx = np.random.choice(np.arange(len(choose)), self.n_sample_observed_point)
@@ -354,7 +378,7 @@ class PoseNetDataset(DatasetBase):
             'pts': torch.FloatTensor(pts),
             'rgb': torch.FloatTensor(rgb),
             'rgb_choose': torch.IntTensor(rgb_choose).long(),
-            'model': torch.FloatTensor(model_points),
+            'model': torch.FloatTensor(model_pts),
             # 'obj': torch.IntTensor([cls_id]).long(),
             'obj': torch.tensor(cls_id, dtype=torch.long),
             'translation_label': torch.FloatTensor(target_t),
@@ -368,6 +392,7 @@ if __name__ == "__main__":
     from easydict import EasyDict as edict
     import yaml
     from data.dataloader.build import build_dataloader
+    from utils.visualize import visualize_point_cloud
 
     with open('../../cfg/indus.yaml', 'r') as f:
         cfg_dict = yaml.safe_load(f)
@@ -418,7 +443,6 @@ if __name__ == "__main__":
 
 
     def test_point_cloud(is_train: bool = True):
-        from utils.visualize import visualize_point_cloud
         if is_train:
             dataset = PoseNetDataset(cfg.TRAIN_DATA, is_train=True)
 
@@ -468,5 +492,5 @@ if __name__ == "__main__":
             visualize_point_cloud(target_pts, model_pts)
 
 
-    test_point_cloud(is_train=True)
+    test_point_cloud(is_train=False)
     # test_posenet_dataset()
