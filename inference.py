@@ -56,27 +56,5 @@ if __name__ == "__main__":
             [0.0, 0.0, 1.0,],
         ], dtype=np.float64),
     }
-    # source = {
-    #     "image": "/home/yhlever/DeepLearning/6D_object_pose_estimation/datasets/indus/handle-100t-10v/val/images"
-    #              "/color_ims/image_000004.png",
-    #     "depth_image": "/home/yhlever/DeepLearning/6D_object_pose_estimation/datasets/indus/handle-100t-10v/val/images"
-    #              "/depth_ims/image_000004.png",
-    #     "seg_mask": [
-    #                  "/home/yhlever/DeepLearning/6D_object_pose_estimation/datasets/indus/handle-100t-10v/val/images"
-    #                  "/modal_masks/image_000004/channel_000.png",
-    #                  "/home/yhlever/DeepLearning/6D_object_pose_estimation/datasets/indus/handle-100t-10v/val/images"
-    #                  "/modal_masks/image_000004/channel_001.png",
-    #                  "/home/yhlever/DeepLearning/6D_object_pose_estimation/datasets/indus/handle-100t-10v/val/images"
-    #                  "/modal_masks/image_000004/channel_002.png",
-    #                  "/home/yhlever/DeepLearning/6D_object_pose_estimation/datasets/indus/handle-100t-10v/val/images"
-    #                  "/modal_masks/image_000004/channel_003.png",
-    #                  ],
-    #     "cls_ids": [1, 1, 1, 1],
-    #     "camera_k": np.array([
-    #         [1067.13, 0.0, 640.08, ],
-    #         [0.0, 1067.13, 478.95, ],
-    #         [0.0, 0.0, 1.0],
-    #     ], dtype=np.float64),
-    #  }
     result = model.predict(source)
     print("Successful Inference")

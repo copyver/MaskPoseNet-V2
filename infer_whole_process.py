@@ -1,6 +1,8 @@
+import contextlib
 import os
 import random
 import re
+import time
 from pathlib import Path
 from typing import Dict
 from typing import List, Union
@@ -11,6 +13,7 @@ import onnxruntime as ort
 import torch
 import trimesh
 import yaml
+from scipy.spatial import cKDTree
 from torchvision import transforms
 
 from utils.visualize import visualize_point_cloud
@@ -26,8 +29,47 @@ DefaultArgs = {
     "RGB_MASK_FLAG": True,
     "SEG_FILTER_SCORE": 0.25,
     "N_TEMPLATE_VIEW": 42,
-    "DEPTH_SCALE": 5.0,
+    "DEPTH_SCALE": 1.0,  # if real 1.0, syn 5.0
 }
+DefaultCameraK = np.array([
+    1062.67, 0, 646.17,
+    0, 1062.67, 474.24,
+    0, 0, 1.00
+], dtype=np.float64)
+
+
+class Profile(contextlib.ContextDecorator):
+    def __init__(self, t=0.0, device: torch.device = None):
+        """
+        Initialize the Profile class.
+
+        Args:
+            t (float): Initial time. Defaults to 0.0.
+            device (torch.device): Devices used for model inference. Defaults to None (cpu).
+        """
+        self.t = t
+        self.device = device
+        self.cuda = bool(device and str(device).startswith("cuda"))
+
+    def __enter__(self):
+        """Start timing."""
+        self.start = self.time()
+        return self
+
+    def __exit__(self, type, value, traceback):  # noqa
+        """Stop timing."""
+        self.dt = self.time() - self.start  # delta-time
+        self.t += self.dt  # accumulate dt
+
+    def __str__(self):
+        """Returns a human-readable string representing the accumulated elapsed time in the profiler."""
+        return f"Elapsed time is {self.t} s"
+
+    def time(self):
+        """Get current time."""
+        if self.cuda:
+            torch.cuda.synchronize(self.device)
+        return time.time()
 
 
 def init_seeds(seed=0):
@@ -39,30 +81,26 @@ def init_seeds(seed=0):
     torch.cuda.manual_seed_all(seed)  # for Multi-GPU, exception safe
 
 
+def compute_add_error(pc1, pc2):
+    """
+    计算两个点云的ADD误差（平均最近邻距离）。
+    """
+    tree1 = cKDTree(pc1)
+    tree2 = cKDTree(pc2)
+    # 计算pc1中每个点到pc2的最近距离
+    dist1, _ = tree2.query(pc1)
+    # 计算pc2中每个点到pc1的最近距离
+    dist2, _ = tree1.query(pc2)
+    return (np.mean(dist1) + np.mean(dist2)) / 2 * 1000  # mm
+
+
 class Colors:
     def __init__(self):
         """Initialize colors as hex = matplotlib.colors.TABLEAU_COLORS.values()."""
         hexs = (
-            "042AFF",
-            "0BDBEB",
-            "F3F3F3",
-            "00DFB7",
-            "111F68",
-            "FF6FDD",
-            "FF444F",
-            "CCED00",
-            "00F344",
-            "BD00FF",
-            "00B4FF",
-            "DD00BA",
-            "00FFFF",
-            "26C000",
-            "01FFB3",
-            "7D24FF",
-            "7B0068",
-            "FF1B6C",
-            "FC6D2F",
-            "A2FF0B",
+            "042AFF", "0BDBEB", "F3F3F3", "00DFB7", "111F68", "FF6FDD", "FF444F",
+            "CCED00", "00F344", "BD00FF", "00B4FF", "DD00BA", "00FFFF", "26C000",
+            "01FFB3", "7D24FF", "7B0068", "FF1B6C", "FC6D2F", "A2FF0B",
         )
         self.palette = [self.hex2rgb(f"#{c}") for c in hexs]
         self.n = len(self.palette)
@@ -127,6 +165,35 @@ def yaml_load(file="data.yaml", append_filename=False):
         if append_filename:
             data["yaml_file"] = str(file)
         return data
+
+
+def print_preds_table(preds):
+    """
+    打印 preds 字典中的数据
+    """
+    # 定义表格列宽
+    col_width = 10
+    header_fmt = "{:<{w}} {:<{w}} {:<{w}} {:<{w}}".format
+    row_fmt = "{:<{w}} {:<{w}.2f} {:<{w}.2f} {:<{w}.2f}".format
+
+    # 打印表头
+    header = header_fmt("cls_name", "seg_score", "pose_score", "add", w=col_width)
+    print(header)
+
+    # 遍历并打印每一行数据
+    for cls_name, seg_score, pose_score, add in zip(preds['cls_names'], preds['seg_scores'], preds['pose_scores'],
+                                                    preds['adds']):
+        print(row_fmt(cls_name, seg_score, pose_score, add, w=col_width))
+
+    # 计算平均值
+    avg_seg_score = np.mean(preds['seg_scores'])
+    avg_pose_score = np.mean(preds['pose_scores'])
+    avg_add = np.mean(preds['adds'])
+    print(row_fmt("all", avg_seg_score, avg_pose_score, avg_add, w=col_width))
+
+    print("-" * len(header))
+    print(f"Segmentation inference time: {preds['seg_inference']:.4f} ms, "
+          f"Pose inference time: {preds['pose_inference']:.4f} ms")
 
 
 class ModelSeg:
@@ -481,6 +548,7 @@ class ModelPose:
             batch = self.preprocess(batch)
             end_points = self.inference(batch)
             preds = self.postprocess(end_points)
+            preds['cls_names'] = end_points["cls_names"]
             preds["whole_src_points"] = whole_target_pts
             preds["whole_model_points"] = whole_model_points
         return preds
@@ -567,6 +635,7 @@ class ModelPose:
         batch['dense_fo'] = batch_dense_fo
 
         end_points = self.model(batch)
+        end_points['cls_names'] = cls_names
 
         return end_points
 
@@ -968,69 +1037,98 @@ def visualize_pose_bbox(results):
 
 class Model:
     def __init__(self, pose_model_path, seg_model_path, device):
-        init_seeds(1024)
+        """
+        初始化模型，加载分割模型和姿态估计模型。
+
+        Args:
+            pose_model_path (str): 姿态模型文件路径。
+            seg_model_path (str): 分割模型文件路径（ONNX格式）。
+            device (str):  "cuda" 或 "cpu"。
+        """
+        init_seeds(42)
+
         onnxsession = ort.InferenceSession(
             seg_model_path,
             providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
             if ort.get_device() == "GPU" and device == "cuda"
             else ["CPUExecutionProvider"],
         )
+
         self.seg_model = ModelSeg(onnxsession)
         self.pose_model = ModelPose(pose_model_path, args=DefaultArgs, device=device)
 
-    def __call__(self, img, depth_img, camera_k, save: bool = False, vis: bool = False):
+    def __call__(self, img: np.ndarray, depth_img: np.ndarray, camera_k: np.ndarray,
+                 save_seg: bool = False, save_pose: bool = True, vis_pts: bool = False):
+        """
+        对输入图像进行分割和姿态估计推理，并计算 ADD 误差。
+
+        Args:
+            img (np.ndarray): 输入图像
+            depth_img (np.ndarray): 深度图像
+            camera_k (np.ndarray): 相机内参矩阵
+            save_seg (bool, optional): 是否保存分割结果
+            save_pose (bool, optional): 是否保存姿态结果
+            vis_pts (bool, optional): 是否可视化点云
+
+        Returns:
+            dict: 包含分割、姿态和 ADD 误差的预测结果字典。
+        """
         source = {
             "image": img,
             "depth_image": depth_img,
             "camera_k": camera_k,
         }
 
-        # Inference
-        boxes, segments, masks = self.seg_model(image, conf_threshold=0.4, iou_threshold=0.7)
-        seg_scores = [box[4] for box in boxes]
-        cls_ids = [int(box[5]) + 1 for box in boxes]  # add background class
-        mask_list = [masks[i] for i in range(masks.shape[0])]
-        # if len(boxes) > 0 and save:
-        #     self.seg_model.draw_and_visualize(image, boxes, segments, vis=False, save=True)
+        # Inference segmentation
+        with Profile() as ps:
+            boxes, segments, masks = self.seg_model(image, conf_threshold=0.4, iou_threshold=0.7)
 
-        source.update({
-            "seg_scores": seg_scores,
-            "cls_ids": cls_ids,
-            "seg_mask": mask_list,
-        })
-        preds = self.pose_model(source)
+        if len(boxes) > 0:
+            seg_scores = [box[4] for box in boxes]
+            cls_ids = [int(box[5]) + 1 for box in boxes]  # add background class
+            mask_list = [masks[i] for i in range(masks.shape[0])]
+            source.update({
+                "seg_scores": seg_scores,
+                "cls_ids": cls_ids,
+                "seg_mask": mask_list,
+            })
+            if save_seg:
+                self.seg_model.draw_and_visualize(image, boxes, segments, vis=False, save=save_seg)
+
+        # Inference pose
+        with Profile() as pp:
+            preds = self.pose_model(source)
+
         preds.update(source)
-        if save:
+        preds.update({"seg_inference": ps.dt * 1000,
+                      "pose_inference": pp.dt * 1000})
+        if save_pose:
             visualize_pose_bbox(preds)
-        if vis:
-            for i in range(preds["whole_src_points"].shape[0]):
-                sub_src_pts = preds["whole_src_points"][i]
-                pred_R = preds["pred_Rs"][i].reshape(3, 3).astype(np.float32)
-                pred_T = preds["pred_Ts"][i].reshape(3).astype(np.float32)
-                sub_target_pts = (sub_src_pts - pred_T[None, :]) @ pred_R
-                sub_model_pts = preds["whole_model_points"][i]
+
+        adds = []
+
+        for i in range(preds["whole_src_points"].shape[0]):
+            sub_src_pts = preds["whole_src_points"][i]
+            pred_R = preds["pred_Rs"][i].reshape(3, 3).astype(np.float32)
+            pred_T = preds["pred_Ts"][i].reshape(3).astype(np.float32)
+            sub_target_pts = (sub_src_pts - pred_T[None, :]) @ pred_R
+            sub_model_pts = preds["whole_model_points"][i]
+            adds.append(compute_add_error(sub_target_pts, sub_model_pts))
+            if vis_pts:
                 visualize_point_cloud(sub_target_pts, sub_model_pts)
+        preds.update({"adds": adds})
         return preds
 
 
 if __name__ == "__main__":
     pose_model_pt_path = \
         "/home/yhlever/DeepLearning/MaskPoseNet-V2/middle_log/0302-indus-train-b/checkpoints/best.pt"
-    seg_model_onnx_path = '/home/yhlever/DeepLearning/ultralytics/indus/0219-train/weights/best.onnx'
-    image = cv2.imread("/home/yhlever/DeepLearning/6D_object_pose_estimation/datasets/indus/indus-16000t-2000v-2000e/test/images/color_ims/image_000563.png",
+    seg_model_onnx_path = '/home/yhlever/DeepLearning/ultralytics/indus/0219-real-train/weights/best.onnx'
+    image = cv2.imread("/home/yhlever/CLionProjects/ROBOT_GRASP_TORCH/results/image_000008.png",
                        flags=cv2.IMREAD_COLOR)
-    depth_image = cv2.imread("/home/yhlever/DeepLearning/6D_object_pose_estimation/datasets/indus/indus-16000t-2000v-2000e/test/images/depth_ims/image_000563.png",
+    depth_image = cv2.imread("/home/yhlever/CLionProjects/ROBOT_GRASP_TORCH/results/image_000009.png",
                              flags=cv2.IMREAD_UNCHANGED)
-    camera_k = np.array([
-      1047.2423327467961,
-      0.0,
-      640.1973656306953,
-      0.0,
-      1047.2423327467961,
-      478.61932251804814,
-      0.0,
-      0.0,
-      1.0
-    ], dtype=np.float64)
+    camera_k = DefaultCameraK
     my_model = Model(pose_model_pt_path, seg_model_onnx_path, device="cuda")
-    preds = my_model(image, depth_image, camera_k, save=True, vis=False)
+    preds = my_model(image, depth_image, camera_k, save_seg=False, save_pose=True, vis_pts=False)
+    print_preds_table(preds)

@@ -278,17 +278,17 @@ class PoseNetDataset(DatasetBase):
         rgb = self.transform(rgb)
         rgb_choose = get_resize_rgb_choose(choose, [y1, y2, x1, x2], self.img_size)
 
-        # # 随机旋转增强
-        # rand_R = get_random_rotation()
-        # tem1_pts = tem1_pts @ rand_R
-        # tem2_pts = tem2_pts @ rand_R
-        # target_R = target_R @ rand_R
-        #
-        # # 随机平移增强
-        # add_t = np.random.uniform(-self.shift_range, self.shift_range, (1, 3))
-        # target_t += add_t[0]
-        # add_t += 0.001 * np.random.randn(1, 3)
-        # pts += add_t
+        # 随机旋转增强
+        rand_R = get_random_rotation()
+        tem1_pts = tem1_pts @ rand_R
+        tem2_pts = tem2_pts @ rand_R
+        target_R = target_R @ rand_R
+
+        # 随机平移增强
+        add_t = np.random.uniform(-self.shift_range, self.shift_range, (1, 3))
+        target_t += add_t[0]
+        add_t += 0.001 * np.random.randn(1, 3)
+        pts += add_t
 
         input_dict = {
             'pts': torch.FloatTensor(pts),
@@ -379,7 +379,6 @@ class PoseNetDataset(DatasetBase):
             'rgb': torch.FloatTensor(rgb),
             'rgb_choose': torch.IntTensor(rgb_choose).long(),
             'model': torch.FloatTensor(model_pts),
-            # 'obj': torch.IntTensor([cls_id]).long(),
             'obj': torch.tensor(cls_id, dtype=torch.long),
             'translation_label': torch.FloatTensor(target_t),
             'rotation_label': torch.FloatTensor(target_R),
