@@ -106,26 +106,11 @@ class Colors:
         self.n = len(self.palette)
         self.pose_palette = np.array(
             [
-                [255, 128, 0],
-                [255, 153, 51],
-                [255, 178, 102],
-                [230, 230, 0],
-                [255, 153, 255],
-                [153, 204, 255],
-                [255, 102, 255],
-                [255, 51, 255],
-                [102, 178, 255],
-                [51, 153, 255],
-                [255, 153, 153],
-                [255, 102, 102],
-                [255, 51, 51],
-                [153, 255, 153],
-                [102, 255, 102],
-                [51, 255, 51],
-                [0, 255, 0],
-                [0, 0, 255],
-                [255, 0, 0],
-                [255, 255, 255],
+                [255, 128, 0], [255, 153, 51], [255, 178, 102], [230, 230, 0],
+                [255, 153, 255], [153, 204, 255], [255, 102, 255], [255, 51, 255],
+                [102, 178, 255], [51, 153, 255], [255, 153, 153], [255, 102, 102],
+                [255, 51, 51], [153, 255, 153], [102, 255, 102], [51, 255, 51],
+                [0, 255, 0], [0, 0, 255], [255, 0, 0], [255, 255, 255],
             ],
             dtype=np.uint8,
         )
@@ -549,6 +534,7 @@ class ModelPose:
             end_points = self.inference(batch)
             preds = self.postprocess(end_points)
             preds['cls_names'] = end_points["cls_names"]
+            preds['cls_ids'] = end_points['cls_ids']
             preds["whole_src_points"] = whole_target_pts
             preds["whole_model_points"] = whole_model_points
         return preds
@@ -636,6 +622,7 @@ class ModelPose:
 
         end_points = self.model(batch)
         end_points['cls_names'] = cls_names
+        end_points['cls_ids'] = objs
 
         return end_points
 
@@ -780,8 +767,8 @@ class ModelPose:
         whole_model_points = []
 
         for m, o, s in zip(mask, obj, seg_scores):
-            if s < 0.1:
-                continue
+            # if s < 0.1:
+            #     continue
             # 加载/检查mask
             if m is None or not isinstance(m, np.ndarray):
                 raise ValueError("Mask is not a valid numpy array")
@@ -995,11 +982,13 @@ def draw_3d_pts(img, imgpts, color, size=1):
     return img
 
 
-def draw_detections(image, pred_rots, pred_trans, model_points, intrinsics, color=(255, 0, 0)):
+def draw_detections(image, pred_rots, pred_trans, model_points, intrinsics, ids):
     num_pred_instances = len(pred_rots)
     draw_image_bbox = image.copy()
+    color_palette = Colors()
 
     for ind in range(num_pred_instances):
+        color = color_palette(ids[ind], bgr=True)
         # 3d bbox
         scale = (np.max(model_points[ind], axis=0) - np.min(model_points[ind], axis=0))
         shift = np.mean(model_points[ind], axis=0)
@@ -1026,9 +1015,10 @@ def visualize_pose_bbox(results):
     pred_trans = results['pred_Ts'].reshape((-1, 3))
     model_points = results['whole_model_points']
     K = results['camera_k'].reshape((3, 3))
+    cls_ids = results['cls_ids']
 
     # draw_detections返回numpy数组格式的图像
-    img = draw_detections(rgb, pred_rot, pred_trans, model_points, K, color=(255, 0, 0))
+    img = draw_detections(rgb, pred_rot, pred_trans, model_points, K, cls_ids)
     img = np.uint8(img)  # 确保类型为uint8
 
     save_path = 'vis_pose_bbox.png'
@@ -1036,7 +1026,7 @@ def visualize_pose_bbox(results):
 
 
 class Model:
-    def __init__(self, pose_model_path, seg_model_path, device):
+    def __init__(self, pose_model_path, seg_model_path, args, device):
         """
         初始化模型，加载分割模型和姿态估计模型。
 
@@ -1055,10 +1045,11 @@ class Model:
         )
 
         self.seg_model = ModelSeg(onnxsession)
-        self.pose_model = ModelPose(pose_model_path, args=DefaultArgs, device=device)
+        self.pose_model = ModelPose(pose_model_path, args=args, device=device)
 
     def __call__(self, img: np.ndarray, depth_img: np.ndarray, camera_k: np.ndarray,
-                 save_seg: bool = False, save_pose: bool = True, vis_pts: bool = False):
+                 save_seg: bool = False, save_pose: bool = True, vis_pts: bool = False,
+                 pose_all: bool = False):
         """
         对输入图像进行分割和姿态估计推理，并计算 ADD 误差。
 
@@ -1081,12 +1072,16 @@ class Model:
 
         # Inference segmentation
         with Profile() as ps:
-            boxes, segments, masks = self.seg_model(image, conf_threshold=0.4, iou_threshold=0.7)
+            boxes, segments, masks = self.seg_model(img, conf_threshold=0.4, iou_threshold=0.7)
 
         if len(boxes) > 0:
             seg_scores = [box[4] for box in boxes]
             cls_ids = [int(box[5]) + 1 for box in boxes]  # add background class
             mask_list = [masks[i] for i in range(masks.shape[0])]
+            if not pose_all:
+                seg_scores = seg_scores[:1]
+                cls_ids = cls_ids[:1]
+                mask_list = mask_list[:1]
             source.update({
                 "seg_scores": seg_scores,
                 "cls_ids": cls_ids,
@@ -1099,6 +1094,7 @@ class Model:
         with Profile() as pp:
             preds = self.pose_model(source)
 
+        source.pop('cls_ids')
         preds.update(source)
         preds.update({"seg_inference": ps.dt * 1000,
                       "pose_inference": pp.dt * 1000})
@@ -1124,11 +1120,11 @@ if __name__ == "__main__":
     pose_model_pt_path = \
         "/home/yhlever/DeepLearning/MaskPoseNet-V2/middle_log/0302-indus-train-b/checkpoints/best.pt"
     seg_model_onnx_path = '/home/yhlever/DeepLearning/ultralytics/indus/0219-real-train/weights/best.onnx'
-    image = cv2.imread("/home/yhlever/CLionProjects/ROBOT_GRASP_TORCH/results/image_000008.png",
+    image = cv2.imread("/home/yhlever/CLionProjects/ROBOT_GRASP_TORCH/results/image_000002.png",
                        flags=cv2.IMREAD_COLOR)
-    depth_image = cv2.imread("/home/yhlever/CLionProjects/ROBOT_GRASP_TORCH/results/image_000009.png",
+    depth_image = cv2.imread("/home/yhlever/CLionProjects/ROBOT_GRASP_TORCH/results/image_000003.png",
                              flags=cv2.IMREAD_UNCHANGED)
     camera_k = DefaultCameraK
-    my_model = Model(pose_model_pt_path, seg_model_onnx_path, device="cuda")
+    my_model = Model(pose_model_pt_path, seg_model_onnx_path, DefaultArgs, device="cuda")
     preds = my_model(image, depth_image, camera_k, save_seg=False, save_pose=True, vis_pts=False)
     print_preds_table(preds)
