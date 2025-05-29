@@ -35,7 +35,7 @@ class TlessDataset(DatasetBase):
                                              transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                                                   std=[0.229, 0.224, 0.225])])
         self.image_len_info = {}
-        self.test_indices = {}  # 每个场景对应的测试索引
+        self.test_indices = {}
         if is_train:
             self.train_image_info = None
             self.dilate_mask = cfg.DILATE_MASK
@@ -64,17 +64,12 @@ class TlessDataset(DatasetBase):
         self.load_data(is_train)
 
     def load_data(self, is_train=True):
-        """
-        遍历新数据集目录结构:
-        """
-        # 列出所有场景ID文件夹
         scene_ids = [
             d for d in os.listdir(self.dataset_dir)
             if os.path.isdir(os.path.join(self.dataset_dir, d))
         ]
         logger.info(f"Found {len(scene_ids)} scenes in {self.dataset_dir}.")
 
-        # 遍历每个场景文件夹
         for scene_id in scene_ids:
             scene_camera_data = load_anns(self.dataset_dir, scene_id, "scene_camera.json")
             scene_instances_gt_data = load_anns(self.dataset_dir, scene_id, "scene_gt_coco.json")
@@ -90,7 +85,6 @@ class TlessDataset(DatasetBase):
         for i in class_ids:
             self.add_class(source="tless", class_id=i, class_name=f"obj_{i:06d}")
 
-        # 添加图像信息
         for scene_id in scene_ids:
             image_count = self.image_len_info[scene_id]
             if scene_id not in self.test_indices:
@@ -230,24 +224,20 @@ class TlessDataset(DatasetBase):
         cls_id = annotations['category_id']
         cls_name = self.class_names[cls_id]
 
-        # 加载位姿信息（旋转矩阵R和平移向量t
         target_R, target_t = self.load_pose_Rt(scene_id, image_id)
         target_R = np.array(target_R).reshape(3, 3).astype(np.float32)
         target_t = np.array(target_t).reshape(3).astype(np.float32) / 1000.0
 
-        # 加载相机内参矩阵
         camera_k, depth_scale = self.load_camera_k(scene_id, image_id)
         if camera_k is None:
             return None
         camera_k = np.array(camera_k).reshape(3, 3).astype(np.float32)
 
-        # 加载模板数据（两种不同视角）
         tem1_rgb, tem1_choose, tem1_pts = self.get_template(self.templates_dir, cls_name, 6)
         tem2_rgb, tem2_choose, tem2_pts = self.get_template(self.templates_dir, cls_name, 30)
         if tem1_rgb is None or tem2_rgb is None:
             return None
 
-        # 加载目标物体mask
         mask = load_mask(annotations, annotations['height'], annotations['width'])
         if mask is None or np.sum(mask) == 0:
             return None
@@ -261,17 +251,14 @@ class TlessDataset(DatasetBase):
         mask = mask[y1:y2, x1:x2]
         choose = mask.astype(np.float32).flatten().nonzero()[0]
 
-        # 加载深度图数据
         depth_path = random_image_info["depth_path"]
         depth = load_depth_image(depth_path).astype(np.float32)
         depth = depth / 50.0 + 0.15
         pts = get_point_cloud_from_depth(depth, camera_k, [y1, y2, x1, x2])
         pts = pts.reshape(-1, 3)[choose, :]
 
-        # 将点云转换到目标物体的坐标系
         target_pts = (pts - target_t[None, :]) @ target_R
         tem_pts = np.concatenate([tem1_pts, tem2_pts], axis=0)
-        # visualize_point_cloud(target_pts, tem_pts)
         radius = np.max(np.linalg.norm(tem_pts, axis=1))
         target_radius = np.linalg.norm(target_pts, axis=1)
         flag = target_radius < radius * 1.2
@@ -287,7 +274,6 @@ class TlessDataset(DatasetBase):
         choose = choose[choose_idx]
         pts = pts[choose_idx]
 
-        # rgb
         image_path = random_image_info['path']
         rgb = load_color_image(image_path)
         rgb = cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB)
@@ -300,13 +286,11 @@ class TlessDataset(DatasetBase):
         rgb = self.transform(rgb)
         rgb_choose = get_resize_rgb_choose(choose, [y1, y2, x1, x2], self.img_size)
 
-        # 随机旋转增强
         rand_R = get_random_rotation()
         tem1_pts = tem1_pts @ rand_R
         tem2_pts = tem2_pts @ rand_R
         target_R = target_R @ rand_R
 
-        # 随机平移增强
         add_t = np.random.uniform(-self.shift_range, self.shift_range, (1, 3))
         target_t += add_t[0]
         add_t += 0.001 * np.random.randn(1, 3)
@@ -329,7 +313,6 @@ class TlessDataset(DatasetBase):
         return input_dict
 
     def get_test_data(self, index):
-        # 同理
         random_image_info = self.image_info[index]
         scene_id = random_image_info["scene_id"]
         annotations = random_image_info["annotations"]
@@ -340,23 +323,19 @@ class TlessDataset(DatasetBase):
         cls_id = annotations['category_id']
         cls_name = self.class_names[cls_id]
 
-        # 加载位姿信息（旋转矩阵R和平移向量t
         target_R, target_t = self.load_pose_Rt(scene_id, image_id)
         target_R = np.array(target_R).reshape(3, 3).astype(np.float32)
         target_t = np.array(target_t).reshape(3).astype(np.float32) / 1000.0
 
-        # 加载相机内参矩阵
         camera_k, depth_scale = self.load_camera_k(scene_id, image_id)
         if camera_k is None:
             return None
         camera_k = np.array(camera_k).reshape(3, 3).astype(np.float32)
 
-        # 加载模型点云数据
         model_points = self.get_models(self.model_dir, cls_name)
         if model_points is None:
             return None
 
-        # 加载目标物体mask
         mask = load_mask(annotations, annotations['height'], annotations['width'])
         if mask is None or np.sum(mask) == 0:
             return None
@@ -366,15 +345,11 @@ class TlessDataset(DatasetBase):
         mask = mask[y1:y2, x1:x2]
         choose = mask.astype(np.float32).flatten().nonzero()[0]
 
-        # 加载深度图数据
         depth_path = random_image_info["depth_path"]
         depth = load_depth_image(depth_path).astype(np.float32)
         depth = depth / 50.0 + 0.15
         pts = get_point_cloud_from_depth(depth, camera_k, [y1, y2, x1, x2])
         pts = pts.reshape(-1, 3)[choose, :]
-
-        # target_pts = (pts - target_t[None, :]) @ target_R
-        # visualize_point_cloud(target_pts, model_points)
 
         if len(choose) <= self.n_sample_observed_point:
             choose_idx = np.random.choice(np.arange(len(choose)), self.n_sample_observed_point)
@@ -383,7 +358,6 @@ class TlessDataset(DatasetBase):
         choose = choose[choose_idx]
         pts = pts[choose_idx]
 
-        # rgb
         image_path = random_image_info['path']
         rgb = load_color_image(image_path)
         rgb = cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB)
@@ -417,6 +391,7 @@ if __name__ == '__main__':
         cfg_dict = yaml.safe_load(f)
     cfg = edict(cfg_dict)
 
+
     def test_point_cloud(is_train: bool = True):
         from utils.visualize import visualize_point_cloud
         if is_train:
@@ -438,10 +413,8 @@ if __name__ == '__main__':
             tem1_pts = data['tem1_pts'].cpu().numpy().astype(np.float64)
             tem2_pts = data['tem2_pts'].cpu().numpy().astype(np.float64)
 
-            # 使用给定的旋转和平移对 pts 进行变换
             target_pts = (pts - target_t[None, :]) @ target_R
 
-            # 合并 tem1_pts 和 tem2_pts
             tem_pts = np.concatenate([tem1_pts, tem2_pts], axis=0)
             visualize_point_cloud(target_pts, tem_pts)
 
@@ -462,10 +435,9 @@ if __name__ == '__main__':
             target_R = data['rotation_label'].cpu().numpy().astype(np.float64)
             model_pts = data['model'].cpu().numpy().astype(np.float64)
 
-            # 使用给定的旋转和平移对 pts 进行变换
             target_pts = (pts - target_t[None, :]) @ target_R
 
             visualize_point_cloud(target_pts, model_pts)
 
 
-    test_point_cloud(is_train=True,)
+    test_point_cloud(is_train=True, )

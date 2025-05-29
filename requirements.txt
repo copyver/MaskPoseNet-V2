@@ -14,9 +14,7 @@ py-cpuinfo
 trimesh~=4.5.3
 open3d~=0.18.0
 onnx
-onnxslim
-onnxruntime-gpu
-onnxruntime~=1.20.1
+onnxruntime-gpu~=1.21.0
 wheel
 build
 pandas

@@ -55,7 +55,7 @@ class BaseValidator(object):
         raise NotImplementedError("postprocess function not implemented in validator")
 
     def init_metrics(self, model):
-        """Initialize performance metrics for the YOLO model."""
+        """Initialize performance metrics for the model."""
         raise NotImplementedError("init_metrics function not implemented in validator")
 
     def update_metrics(self, preds, batch):
@@ -79,12 +79,12 @@ class BaseValidator(object):
         pass
 
     def get_desc(self):
-        """Get description of the YOLO model."""
+        """Get description of the model."""
         pass
 
     @property
     def metric_keys(self):
-        """Returns the metric keys used in YOLO training/validation."""
+        """Returns the metric keys used in training/validation."""
         return []
 
     def on_plot(self, name, data=None):
@@ -97,7 +97,7 @@ class BaseValidator(object):
         pass
 
     def plot_predictions(self, batch, preds, ni):
-        """Plots YOLO model predictions on batch images."""
+        """Plots model predictions on batch images."""
         pass
 
     def pred_to_json(self, preds, batch):

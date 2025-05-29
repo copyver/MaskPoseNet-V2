@@ -9,7 +9,6 @@ from typing import List, Union
 
 import cv2
 import numpy as np
-import onnxruntime as ort
 import torch
 import trimesh
 import yaml
@@ -17,6 +16,7 @@ from scipy.spatial import cKDTree
 from torchvision import transforms
 
 from utils.visualize import visualize_point_cloud
+from ultralytics import YOLO
 
 DefaultArgs = {
     "MODEL_DIR": "/home/yhlever/DeepLearning/6D_object_pose_estimation/datasets/indus/models",
@@ -73,7 +73,7 @@ class Profile(contextlib.ContextDecorator):
 
 
 def init_seeds(seed=0):
-    """Initialize random number generator (RNG) seeds https://pytorch.org/docs/stable/notes/randomness.html."""
+    """Initialize random number generator seeds"""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -148,9 +148,6 @@ def yaml_load(file="data.yaml", append_filename=False):
 
 
 def print_preds_table(preds):
-    """
-    print preds dict data
-    """
     col_width = 10
     header_fmt = "{:<{w}} {:<{w}} {:<{w}} {:<{w}}".format
     row_fmt = "{:<{w}} {:<{w}.2f} {:<{w}.2f} {:<{w}.2f}".format
@@ -172,367 +169,6 @@ def print_preds_table(preds):
           f"Pose inference time: {preds['pose_inference']:.4f} ms")
 
 
-class ModelSeg:
-    """Segmentation model."""
-
-    def __init__(self, seg_model_path, device):
-        """
-        Initialization.
-        """
-        # Build Ort session
-        if device == "cuda":
-            self.device = torch.device("cuda:0")
-            cuda = True
-        else:
-            self.device = torch.device("cpu")
-            cuda = False
-
-        self.session = ort.InferenceSession(
-            seg_model_path,
-            providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
-            if ort.get_device() == "GPU" and cuda
-            else ["CPUExecutionProvider"],
-        )
-        self.output_names = [x.name for x in self.session.get_outputs()]
-        self.fp16 = self.session.get_inputs()[0].type == "tensor(float16)"
-        self.io = self.session.io_binding()
-        self.bindings = []
-        for output in self.session.get_outputs():
-            y_tensor = torch.empty(output.shape, dtype=torch.float16 if self.fp16 else torch.float32).to(self.device)
-            self.io.bind_output(
-                name=output.name,
-                device_type=self.device.type,
-                device_id=self.device.index if cuda else 0,
-                element_type=np.float16 if self.fp16 else np.float32,
-                shape=tuple(y_tensor.shape),
-                buffer_ptr=y_tensor.data_ptr(),
-            )
-            self.bindings.append(y_tensor)
-
-        self.model_height, self.model_width = [x.shape for x in self.session.get_inputs()][0][-2:]
-
-        self.classes = {0: 'handle', 1: 'socket01', 2: 'socket02', 3: 'socket03', 4: 'socket04', 5: 'socket05'}
-
-        self.color_palette = Colors()
-
-    def __call__(self, im0, conf_threshold=0.4, iou_threshold=0.45, nm=32):
-        """
-        The whole pipeline: pre-process -> inference -> post-process.
-
-        Args:
-            im0 (Numpy.ndarray): original input image.
-            conf_threshold (float): confidence threshold for filtering predictions.
-            iou_threshold (float): iou threshold for NMS.
-            nm (int): the number of masks.
-
-        Returns:
-            boxes (List): list of bounding boxes.
-            segments (List): list of segments.
-            masks (np.ndarray): [N, H, W], output masks.
-        """
-        # Pre-process
-        im, ratio, (pad_w, pad_h) = self.preprocess(im0)
-
-        # Ort inference
-        self.io.bind_input(
-            name="images",
-            device_type=im.device.type,
-            device_id=im.device.index if im.device.type == "cuda" else 0,
-            element_type=np.float16 if self.fp16 else np.float32,
-            shape=tuple(im.shape),
-            buffer_ptr=im.data_ptr(),
-        )
-        self.session.run_with_iobinding(self.io)
-        preds = [tensor.to('cpu').numpy() for tensor in self.bindings]
-
-        # Post-process
-        boxes, segments, masks = self.postprocess(
-            preds,
-            im0=im0,
-            ratio=ratio,
-            pad_w=pad_w,
-            pad_h=pad_h,
-            conf_threshold=conf_threshold,
-            iou_threshold=iou_threshold,
-            nm=nm,
-        )
-
-        return boxes, segments, masks
-
-    def preprocess(self, img):
-        """
-        Pre-processes the input image.
-
-        Args:
-            img (Numpy.ndarray): image about to be processed.
-
-        Returns:
-            img_process (Numpy.ndarray): image preprocessed for inference.
-            ratio (tuple): width, height ratios in letterbox.
-            pad_w (float): width padding in letterbox.
-            pad_h (float): height padding in letterbox.
-        """
-        # Resize and pad input image using letterbox() (Borrowed from Ultralytics)
-        shape = img.shape[:2]  # original image shape
-        new_shape = (self.model_height, self.model_width)
-        r = min(new_shape[0] / shape[0], new_shape[1] / shape[1])
-        ratio = r, r
-        new_unpad = int(round(shape[1] * r)), int(round(shape[0] * r))
-        pad_w, pad_h = (new_shape[1] - new_unpad[0]) / 2, (new_shape[0] - new_unpad[1]) / 2  # wh padding
-        if shape[::-1] != new_unpad:  # resize
-            img = cv2.resize(img, new_unpad, interpolation=cv2.INTER_LINEAR)
-        top, bottom = int(round(pad_h - 0.1)), int(round(pad_h + 0.1))
-        left, right = int(round(pad_w - 0.1)), int(round(pad_w + 0.1))
-        img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(114, 114, 114))
-
-        img = np.expand_dims(img, axis=0)
-        img = img[..., ::-1].transpose((0, 3, 1, 2))  # BGR to RGB, BHWC to BCHW, (n, 3, h, w)
-        img = np.ascontiguousarray(img)  # contiguous
-        img = torch.from_numpy(img)
-
-        img = img.to(self.device)
-        img = img.half() if self.fp16 else img.float()  # uint8 to fp16/32
-        img /= 255
-
-        return img, ratio, (pad_w, pad_h)
-
-    def postprocess(self, preds, im0, ratio, pad_w, pad_h, conf_threshold, iou_threshold, nm=32):
-        """
-        Post-process the prediction.
-
-        Args:
-            preds (Numpy.ndarray): predictions come from ort.session.run().
-            im0 (Numpy.ndarray): [h, w, c] original input image.
-            ratio (tuple): width, height ratios in letterbox.
-            pad_w (float): width padding in letterbox.
-            pad_h (float): height padding in letterbox.
-            conf_threshold (float): conf threshold.
-            iou_threshold (float): iou threshold.
-            nm (int): the number of masks.
-
-        Returns:
-            boxes (List): list of bounding boxes.
-            segments (List): list of segments.
-            masks (np.ndarray): [N, H, W], output masks.
-        """
-        x, protos = preds[0], preds[1]  # Two outputs: predictions and protos
-
-        # Transpose dim 1: (Batch_size, xywh_conf_cls_nm, Num_anchors) -> (Batch_size, Num_anchors, xywh_conf_cls_nm)
-        x = np.einsum("bcn->bnc", x)
-
-        # Predictions filtering by conf-threshold
-        x = x[np.amax(x[..., 4:-nm], axis=-1) > conf_threshold]
-
-        # Create a new matrix which merge these(box, score, cls, nm) into one
-        # For more details about `numpy.c_()`: https://numpy.org/doc/1.26/reference/generated/numpy.c_.html
-        x = np.c_[x[..., :4], np.amax(x[..., 4:-nm], axis=-1), np.argmax(x[..., 4:-nm], axis=-1), x[..., -nm:]]
-
-        # NMS filtering
-        x = x[cv2.dnn.NMSBoxes(x[:, :4], x[:, 4], conf_threshold, iou_threshold)]
-
-        # Decode and return
-        if len(x) > 0:
-            # Bounding boxes format change: cxcywh -> xyxy
-            x[..., [0, 1]] -= x[..., [2, 3]] / 2
-            x[..., [2, 3]] += x[..., [0, 1]]
-
-            # Rescales bounding boxes from model shape(model_height, model_width) to the shape of original image
-            x[..., :4] -= [pad_w, pad_h, pad_w, pad_h]
-            x[..., :4] /= min(ratio)
-
-            # Bounding boxes boundary clamp
-            x[..., [0, 2]] = x[:, [0, 2]].clip(0, im0.shape[1])
-            x[..., [1, 3]] = x[:, [1, 3]].clip(0, im0.shape[0])
-
-            # Process masks
-            masks = self.process_mask(protos[0], x[:, 6:], x[:, :4], im0.shape)
-
-            # Masks -> Segments(contours)
-            segments = self.masks2segments(masks)
-            return x[..., :6], segments, masks  # boxes, segments, masks
-        else:
-            return [], [], []
-
-
-    @staticmethod
-    def masks2segments(masks):
-        """
-        Takes a list of masks(n,h,w) and returns a list of segments(n,xy), from
-
-        Args:
-            masks (numpy.ndarray): the output of the model, which is a tensor of shape (batch_size, 160, 160).
-
-        Returns:
-            segments (List): list of segment masks.
-        """
-        segments = []
-        for x in masks.astype("uint8"):
-            c = cv2.findContours(x, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)[0]  # CHAIN_APPROX_SIMPLE
-            if c:
-                c = np.array(c[np.array([len(x) for x in c]).argmax()]).reshape(-1, 2)
-            else:
-                c = np.zeros((0, 2))  # no segments found
-            segments.append(c.astype("float32"))
-        return segments
-
-
-    @staticmethod
-    def crop_mask(masks, boxes):
-        """
-        Takes a mask and a bounding box, and returns a mask that is cropped to the bounding box
-
-        Args:
-            masks (Numpy.ndarray): [n, h, w] tensor of masks.
-            boxes (Numpy.ndarray): [n, 4] tensor of bbox coordinates in relative point form.
-
-        Returns:
-            (Numpy.ndarray): The masks are being cropped to the bounding box.
-        """
-        n, h, w = masks.shape
-        x1, y1, x2, y2 = np.split(boxes[:, :, None], 4, 1)
-        r = np.arange(w, dtype=x1.dtype)[None, None, :]
-        c = np.arange(h, dtype=x1.dtype)[None, :, None]
-        return masks * ((r >= x1) * (r < x2) * (c >= y1) * (c < y2))
-
-
-    def process_mask(self, protos, masks_in, bboxes, im0_shape):
-        """
-        Takes the output of the mask head, and applies the mask to the bounding boxes. This produces masks of higher
-        quality but is slower.
-
-        Args:
-            protos (numpy.ndarray): [mask_dim, mask_h, mask_w].
-            masks_in (numpy.ndarray): [n, mask_dim], n is number of masks after nms.
-            bboxes (numpy.ndarray): bboxes re-scaled to original image shape.
-            im0_shape (tuple): the size of the input image (h,w,c).
-
-        Returns:
-            (numpy.ndarray): The upsampled masks.
-        """
-        c, mh, mw = protos.shape
-        masks = np.matmul(masks_in, protos.reshape((c, -1))).reshape((-1, mh, mw)).transpose(1, 2, 0)  # HWN
-        masks = np.ascontiguousarray(masks)
-        masks = self.scale_mask(masks, im0_shape)  # re-scale mask from P3 shape to original input image shape
-        masks = np.einsum("HWN -> NHW", masks)  # HWN -> NHW
-        masks = self.crop_mask(masks, bboxes)
-        return np.greater(masks, 0.5)
-
-
-    @staticmethod
-    def scale_mask(masks, im0_shape, ratio_pad=None):
-        """
-        Takes a mask, and resizes it to the original image size
-
-        Args:
-            masks (np.ndarray): resized and padded masks/images, [h, w, num]/[h, w, 3].
-            im0_shape (tuple): the original image shape.
-            ratio_pad (tuple): the ratio of the padding to the original image.
-
-        Returns:
-            masks (np.ndarray): The masks that are being returned.
-        """
-        im1_shape = masks.shape[:2]
-        if ratio_pad is None:  # calculate from im0_shape
-            gain = min(im1_shape[0] / im0_shape[0], im1_shape[1] / im0_shape[1])  # gain  = old / new
-            pad = (im1_shape[1] - im0_shape[1] * gain) / 2, (im1_shape[0] - im0_shape[0] * gain) / 2  # wh padding
-        else:
-            pad = ratio_pad[1]
-
-        # Calculate tlbr of mask
-        top, left = int(round(pad[1] - 0.1)), int(round(pad[0] - 0.1))  # y, x
-        bottom, right = int(round(im1_shape[0] - pad[1] + 0.1)), int(round(im1_shape[1] - pad[0] + 0.1))
-        if len(masks.shape) < 2:
-            raise ValueError(f'"len of masks shape" should be 2 or 3, but got {len(masks.shape)}')
-        masks = masks[top:bottom, left:right]
-        masks = cv2.resize(
-            masks, (im0_shape[1], im0_shape[0]), interpolation=cv2.INTER_LINEAR
-        )  # INTER_CUBIC would be better
-        if len(masks.shape) == 2:
-            masks = masks[:, :, None]
-        return masks
-
-
-    def generate_masks(self, im_shape, segments):
-        """
-        Generate individual mask images based on the segments.
-
-        Args:
-            im_shape (tuple): Shape of the original image (height, width, channels).
-            segments (list): List of segment masks (each segment is a list of points).
-
-        Returns:
-            list: A list of binary masks, each corresponding to one segment.
-        """
-        masks = []
-
-        for segment in segments:
-            # Create an empty mask with the same height and width as the original image
-            mask = np.zeros((im_shape[0], im_shape[1]), dtype=np.uint8)
-            # Convert segment points to a numpy array of integers
-            segment_points = np.int32([segment])
-            # Fill the polygon region in the mask
-            cv2.fillPoly(mask, segment_points, 255)
-            # Append the individual mask to the list
-            masks.append(mask)
-
-        return masks
-
-
-    def draw_and_visualize(self, im, bboxes, segments, vis=False, save=True):
-        """
-        Draw and visualize results.
-
-        Args:
-            im (np.ndarray): original image, shape [h, w, c].
-            bboxes (numpy.ndarray): [n, 4], n is number of bboxes.
-            segments (List): list of segment masks.
-            vis (bool): imshow using OpenCV.
-            save (bool): save image annotated.
-
-        Returns:
-            None
-        """
-        # Draw rectangles and polygons
-        im_canvas = im.copy()
-        for (*box, conf, cls_), segment in zip(bboxes, segments):
-            # draw contour and fill mask
-            cv2.polylines(im, np.int32([segment]), True, (255, 255, 255), 2)  # white borderline
-            cv2.fillPoly(im_canvas, np.int32([segment]), self.color_palette(int(cls_), bgr=True))
-
-            # draw bbox rectangle
-            cv2.rectangle(
-                im,
-                (int(box[0]), int(box[1])),
-                (int(box[2]), int(box[3])),
-                self.color_palette(int(cls_), bgr=True),
-                1,
-                cv2.LINE_AA,
-            )
-            cv2.putText(
-                im,
-                f"{self.classes[cls_]}: {conf:.3f}",
-                (int(box[0]), int(box[1] - 9)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                self.color_palette(int(cls_), bgr=True),
-                2,
-                cv2.LINE_AA,
-            )
-
-        # Mix image
-        im = cv2.addWeighted(im_canvas, 0.3, im, 0.7, 0)
-
-        # Show image
-        if vis:
-            cv2.imshow("demo", im)
-            cv2.waitKey(0)
-            cv2.destroyAllWindows()
-
-        # Save image
-        if save:
-            cv2.imwrite("demo.jpg", im)
-
-
 class ModelPose:
     """PoseEstimation Model"""
 
@@ -549,23 +185,14 @@ class ModelPose:
         self.class_names = None
         self._load()
 
-    def __call__(self, source: Dict):
+    def __call__(self, batch):
         with torch.no_grad():
-            batch, whole_target_pts, whole_model_points = self.load_pose_inference_source(
-                image=source["image"],
-                depth_image=source["depth_image"],
-                mask=source["seg_mask"],
-                obj=source["cls_ids"],
-                camera_k=source["camera_k"],
-            )
-
             batch = self.preprocess(batch)
             end_points = self.inference(batch)
             preds = self.postprocess(end_points)
             preds['cls_names'] = end_points["cls_names"]
             preds['cls_ids'] = end_points['cls_ids']
-            preds["whole_src_points"] = whole_target_pts
-            preds["whole_model_points"] = whole_model_points
+
         return preds
 
     def _load(self):
@@ -584,6 +211,7 @@ class ModelPose:
             raise ValueError(f"'class_names' key missing in checkpoint {self.weights}")
         self.class_names = ckpt["class_names"]
 
+        # 根据 'model' 是 state_dict 还是完整 nn.Module，做区分
         model_data = ckpt["model"]
 
         if isinstance(model_data, dict):
@@ -606,6 +234,7 @@ class ModelPose:
 
         model = model.eval()
 
+        # Return model and ckpt
         return model, ckpt
 
     def preprocess(self, batch):
@@ -756,20 +385,27 @@ class ModelPose:
         if len(mask) != len(obj):
             raise ValueError("mask和obj数量不匹配")
 
+        # 加载/检查image
         if image is None or not isinstance(image, np.ndarray):
             raise ValueError("Image is not a valid numpy array")
 
+        # 加载/检查depth_image
         if depth_image is None or not isinstance(depth_image, np.ndarray):
             raise ValueError("Depth image is not a valid numpy array")
         if depth_image.ndim == 3 and depth_image.shape[2] == 3:
+            # Convert the 3-channel image to a single channel
             depth_image = depth_image[:, :, 0]
 
+        # 相机内参处理
         camera_k = np.array(camera_k, dtype=np.float32).reshape(3, 3)
 
+        # 模型点加载
         model_dir = self.args["MODEL_DIR"]
 
+        # 将RGB从BGR转为RGB备用
         rgb_img = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
+        # 深度归一化为米
         depth = depth_image.astype(np.float32) * self.args["DEPTH_SCALE"] / 1000.0 + 0.085
 
         whole_pts = self.get_point_cloud_from_depth(depth, camera_k)
@@ -782,6 +418,7 @@ class ModelPose:
         whole_model_points = []
 
         for m, o in zip(mask, obj):
+            # 加载/检查mask
             if m is None or not isinstance(m, np.ndarray):
                 raise ValueError("Mask is not a valid numpy array")
             m = m.astype(np.uint8)
@@ -792,21 +429,24 @@ class ModelPose:
                 raise ValueError("Model points not found for class {}".format(cls_name))
             radius = np.max(np.linalg.norm(model_points, axis=1))
 
+            # 获取mask的bbox
             m = np.logical_and(m > 0, depth > 0)
             bbox = self.get_bbox(m > 0)
             y1, y2, x1, x2 = bbox
             sub_mask = m[y1:y2, x1:x2]
             choose = sub_mask.astype(np.float32).flatten().nonzero()[0]
 
+            # 获取点云
             pts = whole_pts.copy()[y1:y2, x1:x2, :].reshape(-1, 3)[choose, :]
             center = np.mean(pts, axis=0)
             tmp_cloud = pts - center[None, :]
-            flag = np.linalg.norm(tmp_cloud, axis=1) < radius * 1.5
+            flag = np.linalg.norm(tmp_cloud, axis=1) < radius * 1.2
             if np.sum(flag) < 4:
                 continue
             choose = choose[flag]
             pts = pts[flag]
 
+            # 采样点
             if len(choose) < self.args["N_SAMPLE_OBSERVED_POINT"]:
                 choose_idx = np.random.choice(np.arange(len(choose)), self.args["N_SAMPLE_OBSERVED_POINT"],
                                               replace=True)
@@ -817,6 +457,7 @@ class ModelPose:
             choose = choose[choose_idx]
             pts = pts[choose_idx]
 
+            # 裁剪并处理RGB
             sub_rgb = rgb_img[y1:y2, x1:x2, :]
             if self.args["RGB_MASK_FLAG"]:
                 sub_rgb = sub_rgb * (sub_mask[:, :, None] > 0).astype(np.uint8)
@@ -824,6 +465,7 @@ class ModelPose:
                                  interpolation=cv2.INTER_LINEAR)
             sub_rgb = self.transform(sub_rgb)  # [C,H,W]
 
+            # 获取resize后对应的rgb_choose
             rgb_choose = self.get_resize_rgb_choose(choose, [y1, y2, x1, x2], self.args["IMG_SIZE"])
 
             all_pts.append(torch.FloatTensor(pts))
@@ -834,14 +476,14 @@ class ModelPose:
             whole_model_points.append(np.float64(model_points))
 
         if len(all_pts) == 0:
-            return None
+            return None, None, None
 
         ret_dict = {
             'pts': torch.stack(all_pts, dim=0),
             'rgb': torch.stack(all_rgb, dim=0),
             'rgb_choose': torch.stack(all_rgb_choose, dim=0),
             'model': torch.stack(all_model_points, dim=0),
-            'obj': torch.cat(all_obj, dim=0).long()
+            'obj': torch.cat(all_obj, dim=0).long()  # obj本身是[1]的tensor，这里cat后是[batch]
         }
         whole_target_pts = np.stack(all_pts, axis=0)
         whole_model_points = np.stack(whole_model_points, axis=0)
@@ -855,7 +497,9 @@ class ModelPose:
 
     @staticmethod
     def convert_blender_to_pyrender(blender_nocs):
+        # 交换 Y 和 Z 轴
         pyrender_nocs = blender_nocs[:, :, [0, 2, 1]]
+        # 反转 Y 轴
         pyrender_nocs[:, :, 2] *= -1
         return pyrender_nocs
 
@@ -1032,7 +676,7 @@ def visualize_pose_bbox(results):
 class Model:
     def __init__(self, pose_model_path, seg_model_path, args, device):
         """
-        Initial Model
+        Initial Model.
 
         Args:
             pose_model_path (str): 姿态模型文件路径。
@@ -1041,7 +685,7 @@ class Model:
         """
         init_seeds(42)
         self.device = device
-        self.seg_model = ModelSeg(seg_model_path, device=device)
+        self.seg_model = YOLO(seg_model_path, task='segment')
         self.pose_model = ModelPose(pose_model_path, args=args, device=device)
 
     def __call__(self, img: np.ndarray, depth_img: np.ndarray, camera_k: np.ndarray,
@@ -1067,29 +711,79 @@ class Model:
 
         # Inference segmentation
         with Profile() as ps:
-            boxes, segments, masks = self.seg_model(img, conf_threshold=0.6, iou_threshold=0.6)
-
-        if len(boxes) > 0:
-            seg_scores = [box[4] for box in boxes]
-            cls_ids = [int(box[5]) + 1 for box in boxes]  # add background class
+            seg_result = self.seg_model(img, conf=0.6, iou=0.6, imgsz=(960, 1280), half=True,
+                                        device=self.device)[0]
+            boxes = seg_result.boxes.cpu().numpy()
+            seg_scores = boxes.conf.tolist()
+            cls_ids = (boxes.cls.astype(int) + 1).tolist()
+            masks = seg_result.masks.data.cpu().numpy()
             mask_list = [masks[i] for i in range(masks.shape[0])]
-            if not pose_all:
-                seg_scores = seg_scores[:1]
-                segments = segments[:1]
-                cls_ids = cls_ids[:1]
-                mask_list = mask_list[:1]
-            source.update({
-                "segments": segments,
-                "seg_scores": seg_scores,
-                "cls_ids": cls_ids,
-                "seg_mask": mask_list,
-            })
-            if save_seg:
-                self.seg_model.draw_and_visualize(img, boxes, segments, vis=False, save=save_seg)
+            segments = seg_result.masks.xy
 
-        # Inference pose
+        avg_depths = []
+        for m in mask_list:
+            valid = (m > 0)
+            if np.any(valid):
+                depth_vals = depth_img[valid]
+                depth_vals = depth_vals[depth_vals > 0]
+                if depth_vals.size > 0:
+                    avg_depths.append(depth_vals.mean())
+                else:
+                    avg_depths.append(np.inf)
+            else:
+                avg_depths.append(np.inf)
+        order = np.argsort(avg_depths)
+        seg_scores = [seg_scores[i] for i in order]
+        segments = [segments[i] for i in order]
+        cls_ids = [cls_ids[i] for i in order]
+        mask_list = [mask_list[i] for i in order]
+
         with Profile() as pp:
-            preds = self.pose_model(source)
+            if not pose_all and len(segments) > 1:
+                for i in range(len(segments)):
+                    # 按照 idx=i 仅保留单个结果
+                    tmp_scores = seg_scores[i:i + 1]
+                    tmp_segs = segments[i:i + 1]
+                    tmp_cls = cls_ids[i:i + 1]
+                    tmp_masks = mask_list[i:i + 1]
+                    source.update({
+                        "segments": tmp_segs,
+                        "seg_scores": tmp_scores,
+                        "cls_ids": tmp_cls,
+                        "seg_mask": tmp_masks,
+                    })
+
+                    # 尝试加载并解包
+                    result = self.pose_model.load_pose_inference_source(
+                        image=source["image"],
+                        depth_image=source["depth_image"],
+                        mask=source["seg_mask"],
+                        obj=source["cls_ids"],
+                        camera_k=source["camera_k"],
+                    )
+                    if result[0] is not None:
+                        batch, whole_target_pts, whole_model_points = result
+                        preds = self.pose_model(batch)
+                        preds["whole_src_points"] = whole_target_pts
+                        preds["whole_model_points"] = whole_model_points
+                        break
+                else:
+                    raise RuntimeError("所有分割结果都无法生成有效的点云，跳过该帧。")
+            else:
+                # pose_all=True 或者只有一条结果，正常加载
+                result = self.pose_model.load_pose_inference_source(
+                    image=source["image"],
+                    depth_image=source["depth_image"],
+                    mask=source["seg_mask"],
+                    obj=source["cls_ids"],
+                    camera_k=source["camera_k"],
+                )
+                if result[0] is None:
+                    raise RuntimeError("load_pose_inference_source 返回 None，请检查分割结果。")
+                batch, whole_target_pts, whole_model_points = result
+                preds = self.pose_model(batch)
+                preds["whole_src_points"] = whole_target_pts
+                preds["whole_model_points"] = whole_model_points
 
         source.pop('cls_ids')
         preds.update(source)
@@ -1114,13 +808,6 @@ class Model:
 
 
 if __name__ == "__main__":
-    # from ultralytics import YOLO
-    # model = YOLO('/home/yhlever/DeepLearning/ultralytics/indus/0219-real-train/weights/best.onnx',
-    #              task='segment')  # load a pretrained YOLO segmentation model
-    # results = model.predict("/home/yhlever/CLionProjects/ROBOT_GRASP_TORCH/results/image_000050.png"
-    #                         , save=True, imgsz=(960, 1280), conf=0.6, iou=0.6, show_labels=True, show_boxes=False,
-    #                         half=True)
-    # print(results)
     pose_model_pt_path = \
         "/home/yhlever/DeepLearning/MaskPoseNet-V2/middle_log/0302-indus-train-b/checkpoints/best.pt"
     seg_model_onnx_path = '/home/yhlever/DeepLearning/ultralytics/indus/0219-real-train/weights/best.onnx'
@@ -1130,7 +817,7 @@ if __name__ == "__main__":
                              flags=cv2.IMREAD_UNCHANGED)
     camera_k = DefaultCameraK
     my_model = Model(pose_model_pt_path, seg_model_onnx_path, DefaultArgs, device="cuda")
-    preds = my_model(image, depth_image, camera_k, save_seg=True, save_pose=True, vis_pts=False, pose_all=True)
+    preds = my_model(image, depth_image, camera_k, save_seg=False, save_pose=True, vis_pts=False, pose_all=False)
     print_preds_table(preds)
     print(preds['pred_Rs'])
     print(preds['pred_Ts'])

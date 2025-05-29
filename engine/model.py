@@ -49,11 +49,6 @@ class Model(nn.Module):
     def _new(self, cfg: str, task: str = None, verbose: bool = False):
         """
         Initializes a new model and infers the task type from the model definitions.
-
-        This method creates a new model instance based on the provided configuration file. It loads the model
-                configuration, infers the task type if not specified, and initializes the model using the appropriate
-                class from the task map.
-
         Args:
             cfg (str): Path to the model configuration file in YAML format.
             task (str | None): The specific task for the model. If None, it will be inferred from the config.
@@ -61,7 +56,6 @@ class Model(nn.Module):
         Raises:
             ValueError: If the configuration file is invalid or the task cannot be inferred.
             ImportError: If the required dependencies for the specified task are not installed.
-
         """
         cfg_dict = yaml_model_load(cfg)
         self.cfg = cfg_dict
@@ -73,9 +67,6 @@ class Model(nn.Module):
         """
         Loads a model from a checkpoint file or initializes it from a weights file.
 
-        This method handles loading models from either .pt checkpoint files or other weight file formats. It sets
-        up the model, task, and related attributes based on the loaded weights.
-
         Args:
             weights (str): Path to the model weights file to be loaded.
             task (str | None): The task associated with the model. If None, it will be inferred from the model.
@@ -83,10 +74,6 @@ class Model(nn.Module):
         Raises:
             FileNotFoundError: If the specified weights file does not exist or is inaccessible.
             ValueError: If the weights file format is unsupported or invalid.
-
-        Examples:
-            >>> model = Model()
-            >>> model._load("path/to/weights.pt", task="pose")
         """
         if Path(weights).suffix == ".pt":
             self.model, self.ckpt = attempt_load_one_weight(weights, is_train, self.device)
@@ -100,7 +87,6 @@ class Model(nn.Module):
     def train(self, trainer=None, **kwargs):
         """
         Trains the model using the specified dataset and training configuration.
-
 
         Args:
             trainer (BaseTrainer | None): Custom trainer instance for model training. If None, uses default.
@@ -119,10 +105,8 @@ class Model(nn.Module):
         self.trainer = (trainer or self._smart_load("trainer"))(cfg=self.cfg, model=self.model,
                                                                 callbacks=DefaultCallbacks)
         self.trainer.train()
-        # Update model and cfg after training
         if RANK in {-1, 0}:
             ckpt = self.trainer.best if self.trainer.best.exists() else self.trainer.last
-            # training completed, no need to load pre training weights, used for inference in the same stage
             self.model, _ = attempt_load_one_weight(ckpt, is_train=False)
             self.metrics = getattr(self.trainer.validator, "metrics", None)  # TODO: no metrics returned by DDP
         return self.metrics
@@ -134,34 +118,6 @@ class Model(nn.Module):
             predictor=None,
             override=None,
     ) -> List[Results]:
-        """
-        Performs predictions on the given image source using the YOLO model.
-
-        This method facilitates the prediction process, allowing various configurations through keyword arguments.
-        It supports predictions with custom predictors or the default predictor method. The method handles different
-        types of image sources and can operate in a streaming mode.
-
-        Args:
-            override:
-            source (str | Path | int | PIL.Image | np.ndarray | torch.Tensor | List | Tuple): The source
-                of the image(s) to make predictions on. Accepts various types including file paths, URLs, PIL
-                images, numpy arrays, and torch tensors.
-            stream (bool): If True, treats the input source as a continuous stream for predictions.
-            predictor (BasePredictor | None): An instance of a custom predictor class for making predictions.
-                If None, the method uses a default predictor.
-
-
-        Returns:
-            (List[ultralytics.engine.results.Results]): A list of prediction results, each encapsulated in a
-                Results object.
-
-        Examples:
-
-        Notes:
-            - If 'source' is not provided, it defaults to the ASSETS constant with a warning.
-            - The method sets up a new predictor if not already present and updates its arguments with each call.
-            - For SAM-type models, 'prompts' can be passed as a keyword argument.
-        """
         self._check_is_pytorch_model()
         self.cfg.IS_TRAIN = False
         if source is None:
@@ -185,10 +141,6 @@ class Model(nn.Module):
         """
         Exports the model to a different format suitable for deployment.
 
-        This method facilitates the export of the model to various formats (e.g., ONNX, TorchScript) for deployment
-        purposes. It uses the 'Exporter' class for the export process, combining model-specific overrides, method
-        defaults, and any additional arguments provided.
-
         Returns:
             (str): The path to the exported model file.
 
@@ -200,14 +152,6 @@ class Model(nn.Module):
         self._check_is_pytorch_model()
         from engine.exporter import Exporter
 
-        # custom = {
-        #     "imgsz": self.model.args["imgsz"],
-        #     "batch": 1,
-        #     "data": None,
-        #     "device": None,  # reset to avoid multi-GPU errors
-        #     "verbose": False,
-        # }  # method defaults
-        # args = {**custom, **kwargs, "mode": "export"}  # highest priority args on the right
         if override:
             self.cfg = get_cfg(self.cfg, override)
             print(self.cfg)
@@ -216,9 +160,6 @@ class Model(nn.Module):
     def _check_is_pytorch_model(self) -> None:
         """
         Checks if the model is a PyTorch model and raises a TypeError if it's not.
-
-        This method verifies that the model is either a PyTorch module or a .pt file. It's used to ensure that
-        certain operations that require a PyTorch model are only performed on compatible model types.
 
         Raises:
             TypeError: If the model is not a PyTorch module or a .pt file. The error message provides detailed
@@ -231,17 +172,13 @@ class Model(nn.Module):
                 f"model='{self.model}' should be a *.pt PyTorch model to run this method, but is a different format. "
                 f"PyTorch models can train, val, predict and export, i.e. 'model.train(data=...)', but exported "
                 f"formats like ONNX, TensorRT etc. only support 'predict' and 'val' modes, "
-                f"i.e. 'yolo predict model=yolov8n.onnx'.\nTo run CUDA or MPS inference please pass the device "
+                f"i.e. 'predict model=yolov8n.onnx'.\nTo run CUDA or MPS inference please pass the device "
                 f"argument directly in your inference command, i.e. 'model.predict(source=..., device=0)'"
             )
 
     def _smart_load(self, key: str):
         """
         Loads the appropriate module based on the model task.
-
-        This method dynamically selects and returns the correct module (model, trainer, validator, or predictor)
-        based on the current task of the model and the provided key. It uses the task_map attribute to determine
-        the correct module to load.
 
         Args:
             key (str): The type of module to load. Must be one of 'model', 'trainer', 'validator', or 'predictor'.

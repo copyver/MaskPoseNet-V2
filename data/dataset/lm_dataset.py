@@ -24,21 +24,18 @@ from scipy.spatial import cKDTree
 
 
 def compute_add_error(pc1, pc2):
-    """
-    计算两个点云的ADD误差（平均最近邻距离）。
-    """
     tree1 = cKDTree(pc1)
     tree2 = cKDTree(pc2)
-    # 计算pc1中每个点到pc2的最近距离
+
     dist1, _ = tree2.query(pc1)
-    # 计算pc2中每个点到pc1的最近距离
     dist2, _ = tree1.query(pc2)
+
     return (np.mean(dist1) + np.mean(dist2)) / 2
 
 
 class LMDataset(DatasetBase):
     """
-    LineMOD数据集加载
+    load LineMOD dataset
     """
 
     def __init__(self, cfg, is_train=True):
@@ -188,36 +185,30 @@ class LMDataset(DatasetBase):
         return model_pts.astype(np.float32)
 
     def get_train_data(self, index):
-        # 获取当前训练图片ID及其所有标注
         image_id = self.image_ids[index]
         annotations = self.load_image_annotations(image_id)
         if len(annotations) == 0:
             return None
 
-        # 随机选择一个有效标注
         valid_annotation = np.random.choice(annotations)
         cls_id = valid_annotation['category_id']
         cls_name = self.class_names[cls_id]
         annotation_id = valid_annotation['id']
 
-        # 加载位姿信息（旋转矩阵R和平移向量t
         target_R, target_t = self.load_pose_Rt(image_id, annotation_id)
         target_R = np.array(target_R).reshape(3, 3).astype(np.float32)
         target_t = np.array(target_t).reshape(3).astype(np.float32)
 
-        # 加载相机内参矩阵
         camera_k = self.load_camera_k(image_id)
         if camera_k is None:
             return None
         camera_k = np.array(camera_k).reshape(3, 3).astype(np.float32)
 
-        # 加载模板数据（两种不同视角）
         tem1_rgb, tem1_choose, tem1_pts = self.get_template(self.templates_dir, cls_name, 6)
         tem2_rgb, tem2_choose, tem2_pts = self.get_template(self.templates_dir, cls_name, 30)
         if tem1_rgb is None or tem2_rgb is None:
             return None
 
-        # 加载目标物体mask
         mask = load_mask(valid_annotation, self.image_info[image_id]['height'], self.image_info[image_id]['width'])
         if mask is None or np.sum(mask) == 0:
             return None
@@ -231,17 +222,14 @@ class LMDataset(DatasetBase):
         mask = mask[y1:y2, x1:x2]
         choose = mask.astype(np.float32).flatten().nonzero()[0]
 
-        # 加载深度图数据
         depth_path = self.image_info[image_id]['depth_path']
         depth = load_depth_image(depth_path).astype(np.float32)
         depth = depth * self.depth_scale / 1000.0 + 0.085
         pts = get_point_cloud_from_depth(depth, camera_k, [y1, y2, x1, x2])
         pts = pts.reshape(-1, 3)[choose, :]
 
-        # 将点云转换到目标物体的坐标系
         target_pts = (pts - target_t[None, :]) @ target_R
         tem_pts = np.concatenate([tem1_pts, tem2_pts], axis=0)
-        # visualize_point_cloud(target_pts, tem_pts)
         radius = np.max(np.linalg.norm(tem_pts, axis=1))
         target_radius = np.linalg.norm(target_pts, axis=1)
         flag = target_radius < radius * 1.2
@@ -273,13 +261,11 @@ class LMDataset(DatasetBase):
         rgb = self.transform(rgb)
         rgb_choose = get_resize_rgb_choose(choose, [y1, y2, x1, x2], self.img_size)
 
-        # 随机旋转增强
         rand_R = get_random_rotation()
         tem1_pts = tem1_pts @ rand_R
         tem2_pts = tem2_pts @ rand_R
         target_R = target_R @ rand_R
 
-        # 随机平移增强
         add_t = np.random.uniform(-self.shift_range, self.shift_range, (1, 3))
         target_t += add_t[0]
         add_t += 0.001 * np.random.randn(1, 3)
@@ -302,35 +288,29 @@ class LMDataset(DatasetBase):
         return input_dict
 
     def get_test_data(self, index):
-        # 获取当前训练图片ID及其所有标注
         image_id = self.image_ids[index]
         annotations = self.load_image_annotations(image_id)
         if len(annotations) == 0:
             return None
 
-        # 随机选择一个有效标注
         valid_annotation = np.random.choice(annotations)
         cls_id = valid_annotation['category_id']
         cls_name = self.class_names[cls_id]
         annotation_id = valid_annotation['id']
 
-        # 加载位姿信息（旋转矩阵R和平移向量t)
         target_R, target_t = self.load_pose_Rt(image_id, annotation_id)
         target_R = np.array(target_R).reshape(3, 3).astype(np.float32)
         target_t = np.array(target_t).reshape(3).astype(np.float32)
 
-        # 加载相机内参矩阵
         camera_k = self.load_camera_k(image_id)
         if camera_k is None:
             return None
         camera_k = np.array(camera_k).reshape(3, 3).astype(np.float32)
 
-        # 加载模型点云数据
         model_pts = self.get_models(self.model_dir, cls_name)
         if model_pts is None:
             return None
 
-        # 加载目标物体mask
         mask = load_mask(valid_annotation, self.image_info[image_id]['height'], self.image_info[image_id]['width'])
         if mask is None or np.sum(mask) == 0:
             return None
@@ -340,7 +320,6 @@ class LMDataset(DatasetBase):
         mask = mask[y1:y2, x1:x2]
         choose = mask.astype(np.float32).flatten().nonzero()[0]
 
-        # 加载深度图数据
         depth_path = self.image_info[image_id]['depth_path']
         depth = load_depth_image(depth_path).astype(np.float32)
         depth = depth * self.depth_scale / 1000.0 + 0.085
@@ -358,7 +337,6 @@ class LMDataset(DatasetBase):
         choose = choose[choose_idx]
         pts = pts[choose_idx]
 
-        # rgb
         image_path = self.image_info[image_id]['path']
         rgb = load_color_image(image_path)
         rgb = cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB)
@@ -392,7 +370,7 @@ if __name__ == "__main__":
         cfg_dict = yaml.safe_load(f)
     cfg = edict(cfg_dict)
 
-    # 测试代码
+
     def test_posenet_dataset():
         print("开始测试PoseNetDataset加载...")
 
@@ -413,7 +391,6 @@ if __name__ == "__main__":
             print(f" - translation_label: {train_data['translation_label']}")
             print(f" - rotation_label: {train_data['rotation_label'].shape}")
 
-        # 使用DataLoader测试批量加载
         train_dataloader = build_dataloader(train_dataset, batch=cfg.TRAIN_DATA.BATCH_SIZE,
                                             workers=cfg.TRAIN_DATA.WORKERS, shuffle=True)
         # collate_fn=None
@@ -428,7 +405,6 @@ if __name__ == "__main__":
             print(f"Batch {batch_index + 1}: 数据内容: {batch_data.keys()}")
             print(f"Batch {batch_index + 1}: 样本数量: {len(next(iter(batch_data.values())))}")
             if len(batch_data) > 0:
-                # 遍历字典内容
                 for key, value in batch_data.items():
                     print(
                         f" - Key: {key}, 第一个样本 shape: {value[0].shape if hasattr(value[0], 'shape') else type(value[0])}")
@@ -456,10 +432,8 @@ if __name__ == "__main__":
             tem1_pts = data['tem1_pts'].cpu().numpy().astype(np.float64)
             tem2_pts = data['tem2_pts'].cpu().numpy().astype(np.float64)
 
-            # 使用给定的旋转和平移对 pts 进行变换
             target_pts = (pts - target_t[None, :]) @ target_R
 
-            # 合并 tem1_pts 和 tem2_pts
             tem_pts = np.concatenate([tem1_pts, tem2_pts], axis=0)
             visualize_point_cloud(target_pts, tem_pts)
 
@@ -480,7 +454,6 @@ if __name__ == "__main__":
             target_R = data['rotation_label'].cpu().numpy().astype(np.float64)
             model_pts = data['model'].cpu().numpy().astype(np.float64)
 
-            # 使用给定的旋转和平移对 pts 进行变换
             target_pts = (pts - target_t[None, :]) @ target_R
 
             visualize_point_cloud(target_pts, model_pts)

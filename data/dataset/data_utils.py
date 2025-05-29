@@ -24,9 +24,7 @@ def _isArrayLike(obj):
 
 
 def convert_blender_to_pyrender(blender_nocs):
-    # 交换 Y 和 Z 轴
     pyrender_nocs = blender_nocs[:, :, [0, 2, 1]]
-    # 反转 Y 轴
     pyrender_nocs[:, :, 2] *= -1
     return pyrender_nocs
 
@@ -325,7 +323,6 @@ def load_pose_inference_source(image, depth_image, mask, obj, camera_k, cfg, cla
         numpy.ndarray: The original RGB image.
         numpy.ndarray: The complete set of model points.
     """
-    # 确保obj和mask是列表，以便统一处理多对象场景
     if not isinstance(obj, (list, tuple)):
         obj = [obj]
     if not isinstance(mask, (list, tuple)):
@@ -334,33 +331,22 @@ def load_pose_inference_source(image, depth_image, mask, obj, camera_k, cfg, cla
     if len(mask) != len(obj):
         raise ValueError("mask和obj数量不匹配")
 
-    # 加载/检查image
     image = load_image_if_path(image, flags=cv2.IMREAD_COLOR)
     if image is None or not isinstance(image, np.ndarray):
         raise ValueError("Image is not a valid numpy array")
 
-    # 加载/检查depth_image
     depth_image = load_image_if_path(depth_image, flags=cv2.IMREAD_UNCHANGED)
     if depth_image is None or not isinstance(depth_image, np.ndarray):
         raise ValueError("Depth image is not a valid numpy array")
     if depth_image.ndim == 3 and depth_image.shape[2] == 3:
-        # Convert the 3-channel image to a single channel
         depth_image = depth_image[:, :, 0]
 
-    # 相机内参处理
     camera_k = np.array(camera_k, dtype=np.float32).reshape(3, 3)
-
     model_dir = model_dir or Path(cfg.DATA_DIR) / cfg.MODEL_DIR
-
-    # 将RGB从BGR转为RGB备用
     rgb_img = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
-    # 深度归一化为米
     depth = depth_image.astype(np.float32) * cfg.DEPTH_SCALE / 1000.0 + 0.085
-
     whole_pts = get_point_cloud_from_depth(depth, camera_k)
 
-    # 定义transform
     transform = transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406],
@@ -375,32 +361,27 @@ def load_pose_inference_source(image, depth_image, mask, obj, camera_k, cfg, cla
     whole_model_points = []
 
     for m, o in zip(mask, obj):
-        # 加载/检查mask
         m = load_image_if_path(m, flags=cv2.IMREAD_GRAYSCALE)
         if m is None or not isinstance(m, np.ndarray):
             raise ValueError("Mask is not a valid numpy array")
 
-        # 检查mask值范围，若在0-1之间则转换到0-255
         if m.max() <= 1.0:
             m = (m * 255).astype(np.uint8)
         else:
             m = m.astype(np.uint8)
 
-        # 加载模型点
         cls_name = class_names[o]
         model_points = get_models(model_dir, cls_name, cfg.N_SAMPLE_MODEL_POINT)
         if model_points is None:
             continue
         radius = np.max(np.linalg.norm(model_points, axis=1))
 
-        # 获取mask的bbox
         m = np.logical_and(m > 0, depth > 0)
         bbox = get_bbox(m > 0)
         y1, y2, x1, x2 = bbox
         sub_mask = m[y1:y2, x1:x2]
         choose = sub_mask.astype(np.float32).flatten().nonzero()[0]
 
-        # 获取点云
         pts = whole_pts.copy()[y1:y2, x1:x2, :].reshape(-1, 3)[choose, :]
         center = np.mean(pts, axis=0)
         tmp_cloud = pts - center[None, :]
@@ -410,7 +391,6 @@ def load_pose_inference_source(image, depth_image, mask, obj, camera_k, cfg, cla
         choose = choose[flag]
         pts = pts[flag]
 
-        # 采样点
         if len(choose) < cfg.N_SAMPLE_OBSERVED_POINT:
             choose_idx = np.random.choice(np.arange(len(choose)), cfg.N_SAMPLE_OBSERVED_POINT, replace=True)
         else:
@@ -419,14 +399,12 @@ def load_pose_inference_source(image, depth_image, mask, obj, camera_k, cfg, cla
         choose = choose[choose_idx]
         pts = pts[choose_idx]
 
-        # 裁剪并处理RGB
         sub_rgb = rgb_img[y1:y2, x1:x2, :]
         if cfg.RGB_MASK_FLAG:
             sub_rgb = sub_rgb * (sub_mask[:, :, None] > 0).astype(np.uint8)
         sub_rgb = cv2.resize(sub_rgb, (cfg.IMG_SIZE, cfg.IMG_SIZE), interpolation=cv2.INTER_LINEAR)
-        sub_rgb = transform(sub_rgb)  # [C,H,W]
+        sub_rgb = transform(sub_rgb)
 
-        # 获取resize后对应的rgb_choose
         rgb_choose = get_resize_rgb_choose(choose, [y1, y2, x1, x2], cfg.IMG_SIZE)
 
         all_pts.append(torch.FloatTensor(pts))
@@ -444,7 +422,7 @@ def load_pose_inference_source(image, depth_image, mask, obj, camera_k, cfg, cla
         'rgb': torch.stack(all_rgb, dim=0),
         'rgb_choose': torch.stack(all_rgb_choose, dim=0),
         'model': torch.stack(all_model_points, dim=0),
-        'obj': torch.cat(all_obj, dim=0).long()  # obj本身是[1]的tensor，这里cat后是[batch]
+        'obj': torch.cat(all_obj, dim=0).long()
     }
     whole_model_points = np.stack(whole_model_points, axis=0)
     return ret_dict, image, depth_image, mask, whole_model_points

@@ -290,10 +290,7 @@ def weighted_procrustes(
         src_centroid=None,
         ref_centroid=None,
 ):
-    r"""Compute rigid transformation from `src_points` to `ref_points` using weighted SVD.
-
-    Modified from [PointDSC](https://github.com/XuyangBai/PointDSC/blob/master/models/common.py).
-
+    """Compute rigid transformation from `src_points` to `ref_points` using weighted SVD.
     Args:
         src_points: torch.Tensor (B, N, 3) or (N, 3)
         ref_points: torch.Tensor (B, N, 3) or (N, 3)

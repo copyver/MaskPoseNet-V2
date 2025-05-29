@@ -262,7 +262,7 @@ class PoseNetDataset(DatasetBase):
         pts = pts[choose_idx]
 
         add_error = compute_add_error(pts, tem_pts)
-        if add_error > 1.0:
+        if add_error > 0.8:
             return None
 
         # rgb
@@ -348,12 +348,12 @@ class PoseNetDataset(DatasetBase):
         # 加载深度图数据
         depth_path = self.image_info[image_id]['depth_path']
         depth = load_depth_image(depth_path).astype(np.float32)
-        depth = depth * self.depth_scale / 1000.0 + 0.085
+        depth = depth * self.depth_scale / 1000.0
         pts = get_point_cloud_from_depth(depth, camera_k, [y1, y2, x1, x2])
         pts = pts.reshape(-1, 3)[choose, :]
 
         add_error = compute_add_error(pts, model_pts)
-        if add_error > 1.0:
+        if add_error > 0.8:
             return None
 
         if len(choose) <= self.n_sample_observed_point:
@@ -491,5 +491,5 @@ if __name__ == "__main__":
             visualize_point_cloud(target_pts, model_pts)
 
 
-    test_point_cloud(is_train=False)
+    test_point_cloud(is_train=True)
     # test_posenet_dataset()

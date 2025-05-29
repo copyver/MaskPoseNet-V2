@@ -171,7 +171,6 @@ class BaseTrainer:
                 # self.loss.backward()
                 self.scaler.scale(self.loss).backward()
 
-                # Optimize - https://pytorch.org/docs/master/notes/amp_examples.html
                 if ni - last_opt_step >= self.accumulate:
                     self.optimizer_step()
                     last_opt_step = ni
@@ -311,7 +310,7 @@ class BaseTrainer:
         pass
 
     def final_eval(self):
-        """Performs final evaluation and validation for object detection YOLO model."""
+        """Performs final evaluation and validation for object detection model."""
         ckpt = {}
         for f in self.last, self.best:
             if f.exists():
@@ -525,7 +524,6 @@ class BaseTrainer:
         else:
             raise NotImplementedError(
                 f"Optimizer '{name}' not found in list of available optimizers {optimizers}. "
-                "Request support for addition optimizers at https://github.com/ultralytics/ultralytics."
             )
 
         optimizer.add_param_group({"params": g[0], "weight_decay": decay})  # add g0 with weight_decay
@@ -588,8 +586,6 @@ class BaseTrainer:
     def validate(self):
         """
         Runs validation on test set using self.validator.
-
-        The returned dict is expected to contain "fitness" key.
         """
         metrics = self.validator(self)
         fitness = metrics.pop("fitness", -self.loss.detach().cpu().numpy())  # use loss as fitness measure if not found

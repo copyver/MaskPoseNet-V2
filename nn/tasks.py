@@ -14,10 +14,6 @@ def torch_safe_load(weight):
     Args:
         weight (str): The file path of the PyTorch model.
 
-    Example:
-    ```python
-    ckpt, file = torch_safe_load("path/to/best.pt")
-    ```
     Returns:
         ckpt (dict): The loaded model checkpoint.
         file (str): The loaded filename
@@ -39,11 +35,9 @@ def attempt_load_one_weight(weight, is_train, device=None):
     if "model" not in ckpt:
         raise ValueError(f"'model' key missing in checkpoint {weight_path}")
 
-    # 根据 'model' 是 state_dict 还是完整 nn.Module，做区分
     model_data = ckpt["model"]
 
     if isinstance(model_data, dict):
-        # 只保存了 model.state_dict()
         from models import PoseModel
         from easydict import EasyDict
         if PoseModel is None:
@@ -51,16 +45,14 @@ def attempt_load_one_weight(weight, is_train, device=None):
                 "Checkpoint contains only a state_dict, but no model_builder provided!\n"
                 "Please provide a callable model_builder() that returns an uninitialized model."
             )
-        # 创建模型实例 load_state_dict
         model_cfg = EasyDict(ckpt["train_args"]['POSE_MODEL'])
         if not is_train:
-            model_cfg.FEATURE_EXTRACTION.PRETRAINED = False # inference not need to load pretrained mae weights
+            model_cfg.FEATURE_EXTRACTION.PRETRAINED = False  # inference not need to load pretrained mae weights
 
         model = PoseModel(model_cfg)
         model.load_state_dict(model_data)
         model.to(device).float()
     else:
-        # nn.Module 对象序列化
         model = model_data.to(device).float()
 
     model.pt_path = weight_path  # attach *.pt file path to model

@@ -171,7 +171,6 @@ class PoseValidator(BaseValidator):
 
     def update_metrics(self, preds, batch):
         """
-        使用模型预测结果和对应的ground-truth更新指标统计。
         Args:
             preds (dict): 模型预测结果, 示例:
                 preds = {
@@ -200,13 +199,9 @@ class PoseValidator(BaseValidator):
 
         points = batch['pts'].cpu().numpy()
 
-        # 使用pose进行更新
         self.metrics.process(pred_Rs, pred_Ts, gt_Rs, gt_Ts, points, pose_scores)
 
     def get_stats(self):
-        """
-        从当前的pose评估数据中获取统计结果并更新self.stats字典，然后返回该字典。
-        """
         means = self.metrics.mean_results  # [mean_te, mean_re, mean_add, mean_ps]
         fitness = self.metrics.fitness
         self.stats['te'] = means[0]
@@ -218,7 +213,7 @@ class PoseValidator(BaseValidator):
 
     def print_results(self):
         """
-        self.metrics.result_dict包括:
+        self.metrics.result_dict include:
         {
           'fitness': np.float32(...),
           'metrics/ADD_err': np.float32(...),

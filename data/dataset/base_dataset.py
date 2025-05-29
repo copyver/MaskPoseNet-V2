@@ -167,4 +167,3 @@ class DatasetBase(data.Dataset):
         """Shuffle the dataset at the end of each epoch."""
         if self.is_train:
             np.random.shuffle(self.image_ids)
-

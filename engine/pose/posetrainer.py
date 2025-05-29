@@ -49,7 +49,6 @@ class PoseTrainer(BaseTrainer):
     def label_loss_items(self, loss_items=None, prefix="train"):
         """
         Returns a loss dict with labelled training loss items tensor.
-
         Not needed for classification but necessary for segmentation & detection
         """
         keys = [f"{prefix}/{x}" for x in self.loss_names]
@@ -74,7 +73,7 @@ class PoseTrainer(BaseTrainer):
         return build_dataloader(dataset, batch_size, workers, shuffle, rank)  # return dataloader
 
     def get_validator(self):
-        """Returns a DetectionValidator for YOLO model validation."""
+        """Returns a DetectionValidator for model validation."""
         from engine.pose.posevalidator import PoseValidator
         self.loss_names = "coarse0", "coarse1", "coarse2", "fine0", "fine1", "fine2"
         return PoseValidator(

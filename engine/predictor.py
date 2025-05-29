@@ -9,8 +9,6 @@ class BasePredictor:
     """
     BasePredictor.
 
-    A base class for creating predictors.
-
     Attributes:
         save_dir (Path): Directory to save results.
         done_warmup (bool): Whether the predictor has finished setup.

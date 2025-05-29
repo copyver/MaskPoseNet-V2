@@ -83,22 +83,17 @@ if __name__ == '__main__':
             for key, value in batch_data.items():
                 print(f" - Key: {key}, shape: {value.shape}")
 
-            # 准备模型输入
-            # 将 batch_data 中的所有张量移动到设备上
             end_points = {}
             for key, value in batch_data.items():
                 if isinstance(value, torch.Tensor):
                     end_points[key] = value.to(device)
                 else:
-                    # 如果不是张量，可能需要特殊处理
+
                     pass
 
-            # 运行模型前向传播
             output = model(end_points)
 
-            # 打印输出
             print("模型输出:")
             print(output)
 
-            # 由于只是测试，只运行一个批次
             break

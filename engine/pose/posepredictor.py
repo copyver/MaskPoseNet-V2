@@ -136,7 +136,6 @@ class PosePredictor(BasePredictor):
         for cls_name in cls_names:
             all_tem, all_tem_pts, all_tem_choose = get_all_templates(self.cfg.TEST_DATA, cls_name, self.device)
 
-            # 调用特征提取函数
             dense_po, dense_fo = self.model.model.feature_extraction.get_obj_feats(
                 all_tem, all_tem_pts, all_tem_choose
             )
@@ -171,7 +170,7 @@ class PosePredictor(BasePredictor):
         return preds
 
     def setup_model(self, model, verbose=True):
-        """Initialize YOLO model with given parameters and set it to evaluation mode."""
+        """Initialize model with given parameters and set it to evaluation mode."""
         automodel = AutoBackend(
             weights=model,
             device=select_device(device=self.cfg.SOLVERS.DEVICE, batch=self.cfg.TRAIN_DATA.BATCH_SIZE),

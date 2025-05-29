@@ -1,31 +1,3 @@
-# Ultralytics YOLO 🚀, AGPL-3.0 license
-"""
-Export a  PyTorch model to other formats. TensorFlow exports authored by https://github.com/zldrobit.
-
-Format                  | `format=argument`         | Model
----                     | ---                       | ---
-PyTorch                 | -                         | .pt
-TorchScript             | `torchscript`             | .torchscript
-ONNX                    | `onnx`                    | .onnx
-TensorRT                | `engine`                  | yolo11n.engine
-
-
-Python:
-    from ultralytics import YOLO
-    model = YOLO('yolo11n.pt')
-    results = model.export(format='onnx')
-
-CLI:
-    $ yolo mode=export model=yolo11n.pt format=onnx
-
-
-
-TensorFlow.js:
-    $ cd .. && git clone https://github.com/zldrobit/tfjs-yolov5-example.git && cd tfjs-yolov5-example
-    $ npm install
-    $ ln -s ../../yolo11n_web_model public/yolo11n_web_model
-    $ npm start
-"""
 
 import gc
 import json
@@ -57,7 +29,7 @@ def export_formats():
 
 
 def try_export(inner_func):
-    """YOLO export decorator, i.e. @try_export."""
+    """export decorator, i.e. @try_export."""
     inner_args = get_default_args(inner_func)
 
     def outer_func(*args, **kwargs):
@@ -78,7 +50,6 @@ def try_export(inner_func):
 class Exporter:
     """
     A class for exporting a model.
-
     Attributes:
         cfg (SimpleNamespace): Configuration for the exporter.
         callbacks (list, optional): List of callback functions. Defaults to None.
@@ -219,9 +190,9 @@ class Exporter:
             logger.info(
                 f'\nExport complete ({time.time() - t:.1f}s)'
                 f"\nResults saved to {colorstr('bold', file.parent.resolve())}"
-                f'\nPredict:         yolo predict task={model.task} model={f} {q} '
-                f'\nValidate:        yolo val task={model.task} model={f} {q} '
-                f'\nVisualize:       https://netron.app'
+                f'\nPredict:         predict task={model.task} model={f} {q} '
+                f'\nValidate:        val task={model.task} model={f} {q} '
+                f'\nVisualize:       '
             )
 
         self.run_callbacks("on_export_end")
@@ -237,19 +208,9 @@ class Exporter:
 
     @try_export
     def export_torchscript(self, prefix=colorstr("TorchScript:")):
-        """YOLO TorchScript model export."""
+        """TorchScript model export."""
         logger.info(f"\n{prefix} starting export with torch {torch.__version__}...")
         f = self.file.with_suffix(".torchscript")
-
-        # ts = torch.jit.trace(self.model, self.input_tensor, strict=False)
-        # extra_files = {"config.txt": json.dumps(self.metadata)}  # torch._C.ExtraFilesMap()
-        # if self.cfg.OPTIMIZE:  # https://pytorch.org/tutorials/recipes/mobile_interpreter.html
-        #     logger.info(f"{prefix} optimizing for mobile...")
-        #     from torch.utils.mobile_optimizer import optimize_for_mobile
-        #
-        #     optimize_for_mobile(ts)._save_for_lite_interpreter(str(f), _extra_files=extra_files)
-        # else:
-        #     ts.save(str(f), _extra_files=extra_files)
         ts = torch.jit.script(self.model, example_inputs=self.input_tensor)
         extra_files = {"config.txt": json.dumps(self.metadata)}
         ts.save(str(f), _extra_files=extra_files)
@@ -257,7 +218,7 @@ class Exporter:
 
     @try_export
     def export_onnx(self, prefix=colorstr("ONNX:")):
-        """YOLO ONNX export."""
+        """ONNX export."""
         import onnx  # noqa
         opset_version = get_latest_opset()
         logger.info(f"\n{prefix} starting export with onnx {onnx.__version__} opset {opset_version}...")
@@ -301,16 +262,16 @@ class Exporter:
 
     @try_export
     def export_engine(self, prefix=colorstr("TensorRT:")):
-        """YOLO TensorRT export https://developer.nvidia.com/tensorrt."""
+        """TensorRT export """
         assert self.device.type != "cpu", "export running on CPU but must be on GPU, i.e. use 'device=0'"
-        f_onnx, _ = self.export_onnx()  # run before TRT import https://github.com/ultralytics/ultralytics/issues/7016
+        f_onnx, _ = self.export_onnx()
 
         try:
             import tensorrt as trt  # noqa
         except ImportError:
             raise ImportError("tensorrt is not installed")
         check_version(trt.__version__, ">=7.0.0", hard=True)
-        check_version(trt.__version__, "!=10.1.0", msg="https://github.com/ultralytics/ultralytics/pull/14239")
+        check_version(trt.__version__, "!=10.1.0")
 
         # Setup and checks
         logger.info(f"\n{prefix} starting export with TensorRT {trt.__version__}...")

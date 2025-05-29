@@ -33,11 +33,7 @@ def get_default_tensor(input_dict, device='cuda'):
     # Initialize tensors with zeros and move them to the specified device
     torch.float
     for key, shape in input_dict.items():
-        # 简单使用 torch.empty 创建占位张量
-        # 逻辑上各输入代表的含义需根据实际模型做对应dummy值生成
-        # 此处仅作为warmup占位，不影响实际推理结果
         if 'choose' in key:
-            # choose 通常是索引或int类型张量，使用long类型填充
             input_dict[key] = torch.zeros(shape, dtype=torch.long, device=device)
         else:
             input_dict[key] = torch.empty(shape, dtype=torch.float, device=device)
